@@ -1,0 +1,26 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.dump
+*.sql.gz
+.vercel
+.config/
+.local/
+datos_secretos_de_app.xlsx
+
+# Development/import artifacts are not part of the deployable application.
+attached_assets/*.csv
+attached_assets/*.docx
+attached_assets/*.xlsx
+attached_assets/*.pdf
+attached_assets/*.txt
+.neon
+.agents/
