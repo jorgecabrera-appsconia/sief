@@ -15,7 +15,7 @@
       "destination": "/api/handler?__sief_path=$1"
     },
     {
-      "source": "/(.*)",
+      "source": "/:path((?!api/).*)",
       "destination": "/index.html"
     }
   ]
