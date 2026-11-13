@@ -77,7 +77,7 @@ export const adminUsers = pgTable(
   (table) => [
     check(
       "admin_users_role_check",
-      sql`${table.role} in ('admin', 'superadmin')`,
+      sql`${table.role} in ('bedel', 'admin', 'superadmin')`,
     ),
   ],
 );

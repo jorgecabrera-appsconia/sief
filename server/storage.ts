@@ -92,7 +92,7 @@ export interface PublicRegistrationInput {
   examConditions: Array<"regular" | "libre">;
 }
 
-export type AdminUserRole = "admin" | "superadmin";
+export type AdminUserRole = "bedel" | "admin" | "superadmin";
 
 export interface AdminActor {
   id: number;

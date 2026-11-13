@@ -166,7 +166,91 @@ describe("createApp", () => {
     const response = await agent.get("/api/admin/users");
 
     expect(response.status).toBe(403);
-    expect(response.body.code).toBe("SUPERADMIN_REQUIRED");
+    expect(response.body.code).toBe("ROLE_FORBIDDEN");
+  });
+
+  it("allows a bedel to manage the complete inscriptions workflow", async () => {
+    const now = new Date("2026-11-13T12:00:00.000Z");
+    const bedel = {
+      id: 1, username: "bedeltm", password: "stored-hash", role: "bedel",
+      isActive: true, mustChangePassword: false, sessionVersion: 1,
+      createdAt: now, updatedAt: now,
+    };
+    const student = {
+      id: 10, firstName: "Ana", lastName: "Pérez", dni: "12345678",
+      phone: "3804000000", email: "ana@example.com", profesorado: "Biología",
+      turno: "siesta", year: 2, division: "A", yearEntered: 2025, createdAt: now,
+    };
+    const inscription = {
+      id: 20, studentId: 10, examScheduleIds: ["30"], examConditions: ["regular"],
+      status: "pending", confirmedBy: null, confirmedAt: null,
+      permissionNumber: null, createdAt: now,
+    };
+    const examSchedule = {
+      id: 30, examCallId: 4, subject: "Biología", year: 2,
+      profesorado: "Biología", turno: "siesta", division: "A",
+      date: "2026-11-20", time: "18:00", teacher: "Docente",
+      presidente: "Presidente", vocal1: "Vocal 1", vocal2: "Vocal 2",
+      vocalSuplente: "Suplente", period: "Noviembre 2026",
+      registrationOpen: true, createdAt: now,
+    };
+    const storage = createStorage({
+      validateAdminCredentials: async () => bedel,
+      getAdminUserById: async () => bedel,
+      getAllStudents: async () => [student],
+      getAllInscriptions: async () => [inscription],
+      getStudent: async () => student,
+      getExamSchedule: async () => examSchedule,
+      updateInscriptionStatus: async (_id, status) => ({ ...inscription, status }),
+      getNextPermissionNumber: async () => 42,
+      getInscriptionStatistics: async () => ({ total: 1 }),
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+
+    await agent.post("/api/auth/login").send({ username: "bedeltm", password: "valid-password" });
+
+    expect((await agent.get("/api/students")).status).toBe(200);
+    expect((await agent.get("/api/inscriptions")).status).toBe(200);
+    expect((await agent.patch("/api/inscriptions/20/status").send({ status: "confirmed" })).status).toBe(200);
+    expect((await agent.get("/api/inscriptions/export")).status).toBe(200);
+    expect((await agent.get("/api/statistics")).status).toBe(200);
+    expect((await agent.get("/api/statistics/inscriptions")).status).toBe(200);
+    expect((await agent.get("/api/permission-counter/next")).status).toBe(200);
+  });
+
+  it.each([
+    ["post", "/api/exam-schedules"],
+    ["put", "/api/exam-schedules/1"],
+    ["patch", "/api/exam-schedules/1"],
+    ["delete", "/api/exam-schedules/1"],
+    ["post", "/api/teachers"],
+    ["post", "/api/subjects"],
+    ["patch", "/api/subjects/1"],
+    ["delete", "/api/subjects/1"],
+    ["post", "/api/exam-calls"],
+    ["put", "/api/exam-calls/1"],
+    ["patch", "/api/exam-calls/1/activate"],
+    ["delete", "/api/exam-calls/1"],
+    ["post", "/api/exam-calls/1/clone"],
+    ["get", "/api/admin/users"],
+    ["post", "/api/maintenance/toggle"],
+  ] as const)("forbids a bedel from %s %s", async (method, path) => {
+    const bedel = {
+      id: 1, username: "bedeltm", password: "stored-hash", role: "bedel",
+      isActive: true, mustChangePassword: false, sessionVersion: 1,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const storage = createStorage({
+      validateAdminCredentials: async () => bedel,
+      getAdminUserById: async () => bedel,
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+    await agent.post("/api/auth/login").send({ username: "bedeltm", password: "valid-password" });
+
+    const response = await agent[method](path).send({});
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe("ROLE_FORBIDDEN");
   });
 
   it("restricts a user to changing their password when a change is required", async () => {
@@ -176,7 +260,7 @@ describe("createApp", () => {
       id: 1,
       username: "bedeltm",
       password: "stored-hash",
-      role: "admin",
+      role: "bedel",
       isActive: true,
       mustChangePassword,
       sessionVersion,
@@ -254,12 +338,13 @@ describe("createApp", () => {
     const created = await agent.post("/api/admin/users").send({
       username: "  Nuevo.Usuario  ",
       password: "temporary-password",
-      role: "admin",
+      role: "bedel",
       isActive: true,
       mustChangePassword: true,
     });
     expect(created.status).toBe(201);
     expect(created.body.username).toBe("nuevo.usuario");
+    expect(created.body.role).toBe("bedel");
     expect(JSON.stringify(created.body)).not.toContain("hash");
 
     const updated = await agent.patch("/api/admin/users/8").send({ role: "superadmin" });

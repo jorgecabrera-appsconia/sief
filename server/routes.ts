@@ -3,6 +3,7 @@ import {
   AdminUserManagementError,
   RegistrationError,
   storage as defaultStorage,
+  type AdminUserRole,
   type IStorage,
 } from "./storage.js";
 import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertExamCallSchema, insertSubjectSchema, type AdminUser, type ExamSchedule, type Inscription } from "../shared/schema.js";
@@ -14,7 +15,7 @@ declare module 'express-session' {
     user?: {
       id: number;
       username: string;
-      role: string;
+      role: AdminUserRole;
       isActive: boolean;
       mustChangePassword: boolean;
       sessionVersion: number;
@@ -26,11 +27,20 @@ interface AuthenticatedRequest extends Request {
   user?: AdminUser;
 }
 
+const adminUserRoles: readonly AdminUserRole[] = ["bedel", "admin", "superadmin"];
+
+function toAdminUserRole(role: string): AdminUserRole {
+  if (!adminUserRoles.some((candidate) => candidate === role)) {
+    throw new Error("Invalid administrator role");
+  }
+  return role as AdminUserRole;
+}
+
 function toPublicAdminUser(user: AdminUser) {
   return {
     id: user.id,
     username: user.username,
-    role: user.role,
+    role: toAdminUserRole(user.role),
     isActive: user.isActive,
     mustChangePassword: user.mustChangePassword,
     createdAt: user.createdAt,
@@ -42,7 +52,7 @@ function toSessionAdminUser(user: AdminUser) {
   return {
     id: user.id,
     username: user.username,
-    role: user.role,
+    role: toAdminUserRole(user.role),
     isActive: user.isActive,
     mustChangePassword: user.mustChangePassword,
     sessionVersion: user.sessionVersion,
@@ -114,19 +124,23 @@ export function registerRoutes(
     next();
   });
 
-  const requireSuperadmin = (
+  const requireRoles = (...allowedRoles: AdminUserRole[]) => (
     req: AuthenticatedRequest,
     res: Response,
     next: NextFunction,
   ) => requireAuth(req, res, () => {
-    if (req.user?.role !== "superadmin") {
+    if (!req.user || !allowedRoles.includes(req.user.role as AdminUserRole)) {
       return res.status(403).json({
-        error: "Se requiere rol de superadministrador",
-        code: "SUPERADMIN_REQUIRED",
+        error: "El rol del usuario no permite realizar esta operación",
+        code: "ROLE_FORBIDDEN",
       });
     }
     next();
   });
+
+  const requireOperationalRole = requireRoles("bedel", "admin", "superadmin");
+  const requireAdminRole = requireRoles("admin", "superadmin");
+  const requireSuperadmin = requireRoles("superadmin");
 
   const publicRegistrationSchema = z
     .object({
@@ -229,7 +243,7 @@ export function registerRoutes(
     .max(50)
     .regex(/^[a-z0-9._-]+$/, "El usuario contiene caracteres no permitidos");
   const passwordSchema = z.string().min(8).max(128);
-  const roleSchema = z.enum(["admin", "superadmin"]);
+  const roleSchema = z.enum(["bedel", "admin", "superadmin"]);
   const createAdminUserSchema = z.object({
     username: usernameSchema,
     password: passwordSchema,
@@ -403,7 +417,7 @@ export function registerRoutes(
   });
 
   // Student routes
-  app.get("/api/students", requireAuth, async (req, res) => {
+  app.get("/api/students", requireOperationalRole, async (req, res) => {
     try {
       const students = await storage.getAllStudents();
       res.json(students);
@@ -412,7 +426,7 @@ export function registerRoutes(
     }
   });
 
-  app.get("/api/students/dni/:dni", requireAuth, async (req, res) => {
+  app.get("/api/students/dni/:dni", requireOperationalRole, async (req, res) => {
     try {
       const dni = req.params.dni;
       const student = await storage.getStudentByDni(dni);
@@ -427,7 +441,7 @@ export function registerRoutes(
     }
   });
 
-  app.patch("/api/students/:id", requireAuth, async (req, res) => {
+  app.patch("/api/students/:id", requireOperationalRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const updateData = insertStudentSchema.partial().parse(req.body);
@@ -447,7 +461,7 @@ export function registerRoutes(
     }
   });
 
-  app.post("/api/students", requireAuth, async (req, res) => {
+  app.post("/api/students", requireOperationalRole, async (req, res) => {
     try {
       const studentData = insertStudentSchema.parse(req.body);
       
@@ -510,7 +524,7 @@ export function registerRoutes(
     }
   });
 
-  app.post("/api/exam-schedules", requireAuth, async (req, res) => {
+  app.post("/api/exam-schedules", requireAdminRole, async (req, res) => {
     try {
       const examScheduleData = insertExamScheduleSchema.parse(req.body);
 
@@ -539,7 +553,7 @@ export function registerRoutes(
     }
   });
 
-  app.put("/api/exam-schedules/:id", requireAuth, async (req, res) => {
+  app.put("/api/exam-schedules/:id", requireAdminRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const updateData = insertExamScheduleSchema.partial().parse(req.body);
@@ -567,7 +581,7 @@ export function registerRoutes(
     }
   });
 
-  app.patch("/api/exam-schedules/:id", requireAuth, async (req, res) => {
+  app.patch("/api/exam-schedules/:id", requireAdminRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const updateData = insertExamScheduleSchema.partial().parse(req.body);
@@ -595,7 +609,7 @@ export function registerRoutes(
     }
   });
 
-  app.delete("/api/exam-schedules/:id", requireAuth, async (req, res) => {
+  app.delete("/api/exam-schedules/:id", requireAdminRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const deleted = await storage.deleteExamSchedule(id);
@@ -611,7 +625,7 @@ export function registerRoutes(
   });
 
   // Inscription routes
-  app.get("/api/inscriptions", requireAuth, async (req, res) => {
+  app.get("/api/inscriptions", requireOperationalRole, async (req, res) => {
     try {
       let inscriptions: Inscription[];
       if (req.query.activeOnly === "true") {
@@ -656,7 +670,7 @@ export function registerRoutes(
     }
   });
 
-  app.post("/api/inscriptions", requireAuth, async (req, res) => {
+  app.post("/api/inscriptions", requireOperationalRole, async (req, res) => {
     try {
       const inscriptionData = insertInscriptionSchema.parse(req.body);
 
@@ -697,7 +711,7 @@ export function registerRoutes(
   });
 
   // Update inscription status
-  app.patch("/api/inscriptions/:id/status", requireAuth, async (req, res) => {
+  app.patch("/api/inscriptions/:id/status", requireOperationalRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const { status, confirmedBy } = req.body;
@@ -805,7 +819,7 @@ export function registerRoutes(
   });
 
   // Update inscription data
-  app.patch("/api/inscriptions/:id", requireAuth, async (req, res) => {
+  app.patch("/api/inscriptions/:id", requireOperationalRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const { firstName, lastName, dni, phone, email, profesorado, turno, year, examScheduleIds } = req.body;
@@ -852,7 +866,7 @@ export function registerRoutes(
   });
 
   // Export inscriptions to Excel
-  app.get("/api/inscriptions/export", requireAuth, async (req, res) => {
+  app.get("/api/inscriptions/export", requireOperationalRole, async (req, res) => {
     try {
       const inscriptions = await storage.getAllInscriptions();
       
@@ -902,7 +916,7 @@ export function registerRoutes(
     year: z.number().int().min(1).max(4),
   });
 
-  app.post("/api/subjects", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post("/api/subjects", requireAdminRole, async (req: AuthenticatedRequest, res) => {
     try {
       const subjectData = createSubjectSchema.parse(req.body);
       const { subject, created } = await storage.createSubject(subjectData);
@@ -916,7 +930,7 @@ export function registerRoutes(
     }
   });
 
-  app.patch("/api/subjects/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.patch("/api/subjects/:id", requireAdminRole, async (req: AuthenticatedRequest, res) => {
     try {
       const subjectId = parseInt(req.params.id);
       if (isNaN(subjectId)) {
@@ -937,7 +951,7 @@ export function registerRoutes(
     }
   });
 
-  app.delete("/api/subjects/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.delete("/api/subjects/:id", requireAdminRole, async (req: AuthenticatedRequest, res) => {
     try {
       const subjectId = parseInt(req.params.id);
       if (isNaN(subjectId)) {
@@ -975,7 +989,7 @@ export function registerRoutes(
   });
 
   // Statistics route
-  app.get("/api/statistics", requireAuth, async (req, res) => {
+  app.get("/api/statistics", requireOperationalRole, async (req, res) => {
     try {
       const students = await storage.getAllStudents();
       const examSchedules = await storage.getAllExamSchedules();
@@ -1013,7 +1027,7 @@ export function registerRoutes(
     }
   });
 
-  app.post("/api/teachers", requireAuth, async (req, res) => {
+  app.post("/api/teachers", requireAdminRole, async (req, res) => {
     try {
       const teacherData = req.body;
       const teacher = await storage.createTeacher(teacherData);
@@ -1052,7 +1066,7 @@ export function registerRoutes(
   });
 
   // Permission counter routes
-  app.get("/api/permission-counter/next", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/permission-counter/next", requireOperationalRole, async (req: AuthenticatedRequest, res) => {
     try {
       const nextNumber = await storage.getNextPermissionNumber();
       res.json({ permissionNumber: nextNumber });
@@ -1062,7 +1076,7 @@ export function registerRoutes(
   });
 
   // Statistics routes
-  app.get("/api/statistics/inscriptions", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/statistics/inscriptions", requireOperationalRole, async (req: AuthenticatedRequest, res) => {
     try {
       const statistics = await storage.getInscriptionStatistics();
       res.json(statistics);
@@ -1146,7 +1160,7 @@ export function registerRoutes(
     }
   });
 
-  app.post("/api/exam-calls", requireAuth, async (req, res) => {
+  app.post("/api/exam-calls", requireAdminRole, async (req, res) => {
     try {
       const examCallData = insertExamCallSchema.parse(req.body);
       const examCall = await storage.createExamCall(examCallData);
@@ -1160,7 +1174,7 @@ export function registerRoutes(
     }
   });
 
-  app.put("/api/exam-calls/:id", requireAuth, async (req, res) => {
+  app.put("/api/exam-calls/:id", requireAdminRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const updateData = insertExamCallSchema.partial().parse(req.body);
@@ -1180,7 +1194,7 @@ export function registerRoutes(
     }
   });
 
-  app.patch("/api/exam-calls/:id/activate", requireAuth, async (req, res) => {
+  app.patch("/api/exam-calls/:id/activate", requireAdminRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const activated = await storage.setActiveExamCall(id);
@@ -1195,7 +1209,7 @@ export function registerRoutes(
     }
   });
 
-  app.delete("/api/exam-calls/:id", requireAuth, async (req, res) => {
+  app.delete("/api/exam-calls/:id", requireAdminRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const deleted = await storage.deleteExamCall(id);
@@ -1222,7 +1236,7 @@ export function registerRoutes(
   });
 
   // Clone exam call with all its schedules
-  app.post("/api/exam-calls/:id/clone", requireAuth, async (req, res) => {
+  app.post("/api/exam-calls/:id/clone", requireAdminRole, async (req, res) => {
     try {
       const sourceId = parseInt(req.params.id);
       const { name, startDate, endDate } = req.body;
