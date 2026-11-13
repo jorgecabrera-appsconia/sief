@@ -4,14 +4,18 @@
   "outputDirectory": "dist/public",
   "regions": ["cle1"],
   "functions": {
-    "api/[...path].ts": {
+    "api/handler.ts": {
       "maxDuration": 30,
       "memory": 1024
     }
   },
   "rewrites": [
     {
-      "source": "/:path((?!api/).*)",
+      "source": "^/api/(.*)$",
+      "destination": "/api/handler?__sief_path=$1"
+    },
+    {
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
