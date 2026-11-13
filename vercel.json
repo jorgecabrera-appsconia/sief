@@ -11,11 +11,11 @@
   },
   "rewrites": [
     {
-      "source": "^/api/(.*)$",
-      "destination": "/api/handler?__sief_path=$1"
+      "source": "/api/:path*",
+      "destination": "/api/handler"
     },
     {
-      "source": "/:path((?!api/).*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ]

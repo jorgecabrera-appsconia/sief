@@ -1,17 +1,41 @@
-import type { Request, Response } from "express";
-import { createApp } from "../server/app";
+import type { Express, Request, Response } from "express";
+import { restoreVercelApiUrl } from "../server/vercel-request";
 
-const app = createApp();
+let appPromise: Promise<Express> | undefined;
 
-export default function handler(request: Request, response: Response) {
-  const url = new URL(request.url, "http://localhost");
-  const apiPath = url.searchParams.get("__sief_path");
+function loadApp(): Promise<Express> {
+  appPromise ??= import("../server/app").then(({ createApp }) => createApp());
+  return appPromise;
+}
 
-  if (apiPath !== null) {
-    url.searchParams.delete("__sief_path");
-    const query = url.searchParams.toString();
-    request.url = `/api/${apiPath}${query ? `?${query}` : ""}`;
+export default async function handler(request: Request, response: Response) {
+  const missingConfiguration: string[] = [];
+  if (!process.env.DATABASE_URL) missingConfiguration.push("DATABASE_URL");
+  if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+    missingConfiguration.push("SESSION_SECRET");
   }
 
-  return app(request, response);
+  if (missingConfiguration.length > 0) {
+    return response.status(500).json({
+      error: "Server configuration is incomplete",
+      code: "MISSING_ENVIRONMENT_VARIABLES",
+      missing: missingConfiguration,
+    });
+  }
+
+  request.url = restoreVercelApiUrl(request.url);
+
+  try {
+    const app = await loadApp();
+    return app(request, response);
+  } catch (error) {
+    console.error(
+      "API initialization failed",
+      error instanceof Error ? error.message : "Unknown error",
+    );
+    return response.status(500).json({
+      error: "Server initialization failed",
+      code: "API_INITIALIZATION_FAILED",
+    });
+  }
 }
