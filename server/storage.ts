@@ -1,6 +1,6 @@
-import { students, examSchedules, inscriptions, adminUsers, subjects, correlativities, teachers, systemSettings, permissionCounter, examCalls, rateLimitBuckets, type Student, type InsertStudent, type ExamSchedule, type InsertExamSchedule, type Inscription, type InsertInscription, type AdminUser, type InsertAdminUser, type Subject, type InsertSubject, type Teacher, type InsertTeacher, type SystemSetting, type InsertSystemSetting, type ExamCall, type InsertExamCall } from "../shared/schema.js";
+import { students, examSchedules, inscriptions, adminUsers, adminUserAuditLog, subjects, correlativities, teachers, systemSettings, permissionCounter, examCalls, rateLimitBuckets, type Student, type InsertStudent, type ExamSchedule, type InsertExamSchedule, type Inscription, type InsertInscription, type AdminUser, type AdminUserAuditEntry, type InsertAdminUser, type Subject, type InsertSubject, type Teacher, type InsertTeacher, type SystemSetting, type InsertSystemSetting, type ExamCall, type InsertExamCall } from "../shared/schema.js";
 import { db } from "./db.js";
-import { eq, and, sql, isNotNull, ilike, inArray } from "drizzle-orm";
+import { eq, and, sql, isNotNull, ilike, inArray, desc } from "drizzle-orm";
 import { evaluatePassword, hashPassword } from "./security.js";
 
 export interface IStorage {
@@ -36,8 +36,16 @@ export interface IStorage {
 
   // Admin operations
   getAdminUser(username: string): Promise<AdminUser | undefined>;
+  getAdminUserById(id: number): Promise<AdminUser | undefined>;
+  listAdminUsers(): Promise<AdminUser[]>;
   createAdminUser(adminUser: InsertAdminUser): Promise<AdminUser>;
   validateAdminCredentials(username: string, password: string): Promise<AdminUser | null>;
+  createManagedAdminUser(input: ManagedAdminUserCreate, actor: AdminActor): Promise<AdminUser>;
+  updateManagedAdminUser(id: number, input: ManagedAdminUserUpdate, actor: AdminActor): Promise<AdminUser>;
+  resetManagedAdminPassword(id: number, input: ManagedPasswordReset, actor: AdminActor): Promise<AdminUser>;
+  changeAdminPassword(id: number, currentPassword: string, newPassword: string): Promise<AdminUser>;
+  deleteManagedAdminUser(id: number, actor: AdminActor): Promise<void>;
+  listAdminUserAudit(limit: number, offset: number): Promise<{ entries: AdminUserAuditEntry[]; total: number }>;
 
   // Subject operations
   getSubjects(profesorado?: string, year?: number): Promise<Subject[]>;
@@ -82,6 +90,48 @@ export interface PublicRegistrationInput {
   student: InsertStudent;
   examScheduleIds: string[];
   examConditions: Array<"regular" | "libre">;
+}
+
+export type AdminUserRole = "admin" | "superadmin";
+
+export interface AdminActor {
+  id: number;
+  username: string;
+}
+
+export interface ManagedAdminUserCreate {
+  username: string;
+  password: string;
+  role: AdminUserRole;
+  isActive: boolean;
+  mustChangePassword: boolean;
+}
+
+export interface ManagedAdminUserUpdate {
+  username?: string;
+  role?: AdminUserRole;
+  isActive?: boolean;
+  mustChangePassword?: boolean;
+}
+
+export interface ManagedPasswordReset {
+  newPassword: string;
+  mustChangePassword: boolean;
+}
+
+export class AdminUserManagementError extends Error {
+  constructor(
+    public readonly code:
+      | "USER_NOT_FOUND"
+      | "USERNAME_EXISTS"
+      | "LAST_SUPERADMIN"
+      | "SELF_PROTECTION"
+      | "SELF_PASSWORD_RESET"
+      | "INVALID_CURRENT_PASSWORD",
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export class RegistrationError extends Error {
@@ -393,8 +443,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAdminUser(username: string): Promise<AdminUser | undefined> {
-    const [user] = await db.select().from(adminUsers).where(eq(adminUsers.username, username));
+    const normalized = username.trim().toLowerCase();
+    const [user] = await db
+      .select()
+      .from(adminUsers)
+      .where(sql`lower(${adminUsers.username}) = ${normalized}`)
+      .limit(1);
     return user || undefined;
+  }
+
+  async getAdminUserById(id: number): Promise<AdminUser | undefined> {
+    const [user] = await db
+      .select()
+      .from(adminUsers)
+      .where(eq(adminUsers.id, id))
+      .limit(1);
+    return user || undefined;
+  }
+
+  async listAdminUsers(): Promise<AdminUser[]> {
+    return db.select().from(adminUsers).orderBy(adminUsers.username);
   }
 
   async createAdminUser(insertAdminUser: InsertAdminUser): Promise<AdminUser> {
@@ -402,6 +470,7 @@ export class DatabaseStorage implements IStorage {
       .insert(adminUsers)
       .values({
         ...insertAdminUser,
+        username: insertAdminUser.username.trim().toLowerCase(),
         password: await hashPassword(insertAdminUser.password),
       })
       .returning();
@@ -410,7 +479,7 @@ export class DatabaseStorage implements IStorage {
 
   async validateAdminCredentials(username: string, password: string): Promise<AdminUser | null> {
     const user = await this.getAdminUser(username);
-    if (!user) {
+    if (!user || !user.isActive) {
       return null;
     }
     const evaluation = await evaluatePassword(password, user.password);
@@ -422,6 +491,251 @@ export class DatabaseStorage implements IStorage {
         .where(eq(adminUsers.id, user.id));
     }
     return user;
+  }
+
+  async createManagedAdminUser(input: ManagedAdminUserCreate, actor: AdminActor): Promise<AdminUser> {
+    const username = input.username.trim().toLowerCase();
+    const password = await hashPassword(input.password);
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('sief_admin_users', 0))`);
+      const [existing] = await tx
+        .select({ id: adminUsers.id })
+        .from(adminUsers)
+        .where(sql`lower(${adminUsers.username}) = ${username}`)
+        .limit(1);
+      if (existing) {
+        throw new AdminUserManagementError("USERNAME_EXISTS", "El nombre de usuario ya existe");
+      }
+
+      const [created] = await tx
+        .insert(adminUsers)
+        .values({
+          username,
+          password,
+          role: input.role,
+          isActive: input.isActive,
+          mustChangePassword: input.mustChangePassword,
+          sessionVersion: 1,
+          updatedAt: new Date(),
+        })
+        .returning();
+      await tx.insert(adminUserAuditLog).values({
+        actorUserId: actor.id,
+        actorUsername: actor.username,
+        targetUserId: created.id,
+        targetUsername: created.username,
+        action: "created",
+        changes: {
+          role: created.role,
+          isActive: created.isActive,
+          mustChangePassword: created.mustChangePassword,
+        },
+      });
+      return created;
+    });
+  }
+
+  async updateManagedAdminUser(id: number, input: ManagedAdminUserUpdate, actor: AdminActor): Promise<AdminUser> {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('sief_admin_users', 0))`);
+      const [target] = await tx.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
+      if (!target) {
+        throw new AdminUserManagementError("USER_NOT_FOUND", "Usuario no encontrado");
+      }
+
+      if (actor.id === target.id) {
+        if (input.isActive === false || (input.role && input.role !== target.role)) {
+          throw new AdminUserManagementError(
+            "SELF_PROTECTION",
+            "No puede desactivarse ni cambiar su propio rol",
+          );
+        }
+      }
+
+      const nextRole = input.role ?? target.role;
+      const nextActive = input.isActive ?? target.isActive;
+      if (target.role === "superadmin" && target.isActive && (nextRole !== "superadmin" || !nextActive)) {
+        const [{ count }] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(adminUsers)
+          .where(and(eq(adminUsers.role, "superadmin"), eq(adminUsers.isActive, true)));
+        if (count <= 1) {
+          throw new AdminUserManagementError(
+            "LAST_SUPERADMIN",
+            "Debe existir al menos un superadministrador activo",
+          );
+        }
+      }
+
+      const username = input.username?.trim().toLowerCase() ?? target.username;
+      if (username !== target.username) {
+        const [existing] = await tx
+          .select({ id: adminUsers.id })
+          .from(adminUsers)
+          .where(sql`lower(${adminUsers.username}) = ${username}`)
+          .limit(1);
+        if (existing && existing.id !== target.id) {
+          throw new AdminUserManagementError("USERNAME_EXISTS", "El nombre de usuario ya existe");
+        }
+      }
+
+      const mustChangePassword = input.mustChangePassword ?? target.mustChangePassword;
+      const changes: Record<string, unknown> = {};
+      if (username !== target.username) changes.username = { from: target.username, to: username };
+      if (nextRole !== target.role) changes.role = { from: target.role, to: nextRole };
+      if (nextActive !== target.isActive) changes.isActive = { from: target.isActive, to: nextActive };
+      if (mustChangePassword !== target.mustChangePassword) {
+        changes.mustChangePassword = { from: target.mustChangePassword, to: mustChangePassword };
+      }
+      const invalidatesSessions = Object.keys(changes).length > 0;
+      const [updated] = await tx
+        .update(adminUsers)
+        .set({
+          username,
+          role: nextRole,
+          isActive: nextActive,
+          mustChangePassword,
+          sessionVersion: invalidatesSessions
+            ? sql`${adminUsers.sessionVersion} + 1`
+            : target.sessionVersion,
+          updatedAt: new Date(),
+        })
+        .where(eq(adminUsers.id, id))
+        .returning();
+
+      const action = nextActive !== target.isActive
+        ? (nextActive ? "activated" : "deactivated")
+        : "updated";
+      await tx.insert(adminUserAuditLog).values({
+        actorUserId: actor.id,
+        actorUsername: actor.username,
+        targetUserId: updated.id,
+        targetUsername: updated.username,
+        action,
+        changes,
+      });
+      return updated;
+    });
+  }
+
+  async resetManagedAdminPassword(id: number, input: ManagedPasswordReset, actor: AdminActor): Promise<AdminUser> {
+    if (id === actor.id) {
+      throw new AdminUserManagementError(
+        "SELF_PASSWORD_RESET",
+        "Use la opción Cambiar mi contraseña para modificar su propia clave",
+      );
+    }
+    const password = await hashPassword(input.newPassword);
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('sief_admin_users', 0))`);
+      const [target] = await tx.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
+      if (!target) {
+        throw new AdminUserManagementError("USER_NOT_FOUND", "Usuario no encontrado");
+      }
+      const [updated] = await tx
+        .update(adminUsers)
+        .set({
+          password,
+          mustChangePassword: input.mustChangePassword,
+          sessionVersion: sql`${adminUsers.sessionVersion} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(adminUsers.id, id))
+        .returning();
+      await tx.insert(adminUserAuditLog).values({
+        actorUserId: actor.id,
+        actorUsername: actor.username,
+        targetUserId: updated.id,
+        targetUsername: updated.username,
+        action: "password_reset",
+        changes: { mustChangePassword: input.mustChangePassword },
+      });
+      return updated;
+    });
+  }
+
+  async changeAdminPassword(id: number, currentPassword: string, newPassword: string): Promise<AdminUser> {
+    const newPasswordHash = await hashPassword(newPassword);
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`sief_admin_user_${id}`}, 0))`);
+      const [target] = await tx.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
+      if (!target) {
+        throw new AdminUserManagementError("USER_NOT_FOUND", "Usuario no encontrado");
+      }
+      const evaluation = await evaluatePassword(currentPassword, target.password);
+      if (!evaluation.valid) {
+        throw new AdminUserManagementError(
+          "INVALID_CURRENT_PASSWORD",
+          "La contraseña actual es incorrecta",
+        );
+      }
+      const [updated] = await tx
+        .update(adminUsers)
+        .set({
+          password: newPasswordHash,
+          mustChangePassword: false,
+          sessionVersion: sql`${adminUsers.sessionVersion} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(adminUsers.id, id))
+        .returning();
+      await tx.insert(adminUserAuditLog).values({
+        actorUserId: updated.id,
+        actorUsername: updated.username,
+        targetUserId: updated.id,
+        targetUsername: updated.username,
+        action: "password_changed_self",
+        changes: { mustChangePassword: false },
+      });
+      return updated;
+    });
+  }
+
+  async deleteManagedAdminUser(id: number, actor: AdminActor): Promise<void> {
+    if (id === actor.id) {
+      throw new AdminUserManagementError("SELF_PROTECTION", "No puede eliminar su propio usuario");
+    }
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('sief_admin_users', 0))`);
+      const [target] = await tx.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
+      if (!target) {
+        throw new AdminUserManagementError("USER_NOT_FOUND", "Usuario no encontrado");
+      }
+      if (target.role === "superadmin" && target.isActive) {
+        const [{ count }] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(adminUsers)
+          .where(and(eq(adminUsers.role, "superadmin"), eq(adminUsers.isActive, true)));
+        if (count <= 1) {
+          throw new AdminUserManagementError(
+            "LAST_SUPERADMIN",
+            "Debe existir al menos un superadministrador activo",
+          );
+        }
+      }
+      await tx.delete(adminUsers).where(eq(adminUsers.id, id));
+      await tx.insert(adminUserAuditLog).values({
+        actorUserId: actor.id,
+        actorUsername: actor.username,
+        targetUserId: target.id,
+        targetUsername: target.username,
+        action: "deleted",
+        changes: { role: target.role, isActive: target.isActive },
+      });
+    });
+  }
+
+  async listAdminUserAudit(limit: number, offset: number) {
+    const [entries, [{ count }]] = await Promise.all([
+      db
+        .select()
+        .from(adminUserAuditLog)
+        .orderBy(desc(adminUserAuditLog.createdAt), desc(adminUserAuditLog.id))
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(adminUserAuditLog),
+    ]);
+    return { entries, total: count };
   }
 
   // Subject operations

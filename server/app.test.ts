@@ -68,18 +68,24 @@ describe("createApp", () => {
   });
 
   it("persists an authenticated admin session", async () => {
+    const admin = {
+      id: 1,
+      username: "admin",
+      password: "stored-value-never-returned",
+      role: "admin",
+      isActive: true,
+      mustChangePassword: false,
+      sessionVersion: 1,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
     const storage = createStorage({
       validateAdminCredentials: async (username, password) =>
         username === "admin" && password === "valid-password"
-          ? {
-              id: 1,
-              username: "admin",
-              password: "stored-value-never-returned",
-              role: "admin",
-              createdAt: new Date(),
-            }
+          ? admin
           : null,
-    });
+      getAdminUserById: async () => admin,
+    } as Partial<IStorage>);
     const agent = request.agent(buildTestApp(storage));
 
     const login = await agent
@@ -88,10 +94,120 @@ describe("createApp", () => {
     const students = await agent.get("/api/students");
 
     expect(login.status).toBe(200);
-    expect(login.body.user).toEqual({ id: 1, username: "admin", role: "admin" });
+    expect(login.body.user).toEqual({
+      id: 1,
+      username: "admin",
+      role: "admin",
+      isActive: true,
+      mustChangePassword: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
     expect(login.headers["set-cookie"][0]).toContain("HttpOnly");
     expect(login.headers["set-cookie"][0]).toContain("SameSite=Lax");
     expect(students.status).toBe(200);
+  });
+
+  it("allows only a superadmin to list safe administrator records", async () => {
+    const superadmin = {
+      id: 7,
+      username: "jcabrera",
+      password: "stored-hash",
+      role: "superadmin",
+      isActive: true,
+      mustChangePassword: false,
+      sessionVersion: 1,
+      createdAt: new Date("2025-07-25T21:01:26.583Z"),
+      updatedAt: new Date("2025-07-25T21:01:26.583Z"),
+    };
+    const storage = createStorage({
+      validateAdminCredentials: async () => superadmin,
+      getAdminUserById: async () => superadmin,
+      listAdminUsers: async () => [superadmin],
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+
+    await agent.post("/api/auth/login").send({ username: "jcabrera", password: "valid-password" });
+    const response = await agent.get("/api/admin/users");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([{
+      id: 7,
+      username: "jcabrera",
+      role: "superadmin",
+      isActive: true,
+      mustChangePassword: false,
+      createdAt: "2025-07-25T21:01:26.583Z",
+      updatedAt: "2025-07-25T21:01:26.583Z",
+    }]);
+    expect(JSON.stringify(response.body)).not.toContain("stored-hash");
+    expect(JSON.stringify(response.body)).not.toContain("sessionVersion");
+  });
+
+  it("rejects administrator user management by a regular admin", async () => {
+    const admin = {
+      id: 1,
+      username: "bedeltm",
+      password: "stored-hash",
+      role: "admin",
+      isActive: true,
+      mustChangePassword: false,
+      sessionVersion: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const storage = createStorage({
+      validateAdminCredentials: async () => admin,
+      getAdminUserById: async () => admin,
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+
+    await agent.post("/api/auth/login").send({ username: "bedeltm", password: "valid-password" });
+    const response = await agent.get("/api/admin/users");
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe("SUPERADMIN_REQUIRED");
+  });
+
+  it("restricts a user to changing their password when a change is required", async () => {
+    let mustChangePassword = true;
+    let sessionVersion = 1;
+    const currentUser = () => ({
+      id: 1,
+      username: "bedeltm",
+      password: "stored-hash",
+      role: "admin",
+      isActive: true,
+      mustChangePassword,
+      sessionVersion,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const storage = createStorage({
+      validateAdminCredentials: async () => currentUser(),
+      getAdminUserById: async () => currentUser(),
+      changeAdminPassword: async () => {
+        mustChangePassword = false;
+        sessionVersion += 1;
+        return currentUser();
+      },
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+
+    const login = await agent.post("/api/auth/login").send({ username: "bedeltm", password: "old-password" });
+    expect(login.body.user.mustChangePassword).toBe(true);
+
+    const blocked = await agent.get("/api/students");
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.code).toBe("PASSWORD_CHANGE_REQUIRED");
+
+    const changed = await agent.post("/api/auth/change-password").send({
+      currentPassword: "old-password",
+      newPassword: "new-password",
+    });
+    expect(changed.status).toBe(200);
+    expect(changed.body.user.mustChangePassword).toBe(false);
+    expect((await agent.get("/api/students")).status).toBe(200);
   });
 
   it("allows authenticated cloning even when the public read limit is exhausted", async () => {
@@ -99,11 +215,23 @@ describe("createApp", () => {
       examCall: { id: 2, name: "Copia", description: null, startDate: "2027-01-01", endDate: "2027-01-02", isActive: false, createdAt: new Date() },
       clonedSchedules: 150,
     }));
+    const admin = {
+      id: 1,
+      username: "admin",
+      password: "hash",
+      role: "admin",
+      isActive: true,
+      mustChangePassword: false,
+      sessionVersion: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
     const storage = createStorage({
       consumeRateLimit: async (key) => key.startsWith("public-read:") ? 301 : 1,
-      validateAdminCredentials: async () => ({ id: 1, username: "admin", password: "hash", role: "admin", createdAt: new Date() }),
+      validateAdminCredentials: async () => admin,
+      getAdminUserById: async () => admin,
       cloneExamCall,
-    });
+    } as Partial<IStorage>);
     const agent = request.agent(buildTestApp(storage));
 
     expect((await agent.get("/api/exam-calls")).status).toBe(429);

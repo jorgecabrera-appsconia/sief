@@ -1,10 +1,11 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import {
+  AdminUserManagementError,
   RegistrationError,
   storage as defaultStorage,
   type IStorage,
 } from "./storage.js";
-import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertAdminUserSchema, insertExamCallSchema, insertSubjectSchema, type ExamSchedule, type Inscription } from "../shared/schema.js";
+import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertExamCallSchema, insertSubjectSchema, type AdminUser, type ExamSchedule, type Inscription } from "../shared/schema.js";
 import { z } from "zod";
 import { toPublicTeacherStudent } from "./security.js";
 
@@ -14,22 +15,45 @@ declare module 'express-session' {
       id: number;
       username: string;
       role: string;
+      isActive: boolean;
+      mustChangePassword: boolean;
+      sessionVersion: number;
     };
   }
 }
 
-// Authentication middleware
 interface AuthenticatedRequest extends Request {
-  user?: any;
+  user?: AdminUser;
 }
 
-const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  if (!req.session?.user) {
-    return res.status(401).json({ error: "Authentication required" });
-  }
-  req.user = req.session.user;
-  next();
-};
+function toPublicAdminUser(user: AdminUser) {
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    isActive: user.isActive,
+    mustChangePassword: user.mustChangePassword,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+function toSessionAdminUser(user: AdminUser) {
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    isActive: user.isActive,
+    mustChangePassword: user.mustChangePassword,
+    sessionVersion: user.sessionVersion,
+  };
+}
+
+function adminErrorStatus(error: AdminUserManagementError) {
+  if (error.code === "USER_NOT_FOUND") return 404;
+  if (error.code === "INVALID_CURRENT_PASSWORD") return 400;
+  return 409;
+}
 
 async function findExamCallForDate(storage: IStorage, date: string) {
   const examCalls = await storage.getAllExamCalls();
@@ -48,6 +72,62 @@ export function registerRoutes(
   app: Express,
   storage: IStorage = defaultStorage,
 ): void {
+  const requireSession = async (
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    const sessionUser = req.session?.user;
+    if (!sessionUser) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    try {
+      const currentUser = await storage.getAdminUserById(sessionUser.id);
+      const expectedVersion = sessionUser.sessionVersion ?? 1;
+      if (
+        !currentUser ||
+        !currentUser.isActive ||
+        currentUser.sessionVersion !== expectedVersion
+      ) {
+        req.session.destroy(() => undefined);
+        return res.status(401).json({ error: "Session invalidated", code: "SESSION_INVALID" });
+      }
+      req.user = currentUser;
+      req.session.user = toSessionAdminUser(currentUser);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  const requireAuth = (
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) => requireSession(req, res, () => {
+    if (req.user?.mustChangePassword) {
+      return res.status(403).json({
+        error: "Debe cambiar su contraseña antes de continuar",
+        code: "PASSWORD_CHANGE_REQUIRED",
+      });
+    }
+    next();
+  });
+
+  const requireSuperadmin = (
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) => requireAuth(req, res, () => {
+    if (req.user?.role !== "superadmin") {
+      return res.status(403).json({
+        error: "Se requiere rol de superadministrador",
+        code: "SUPERADMIN_REQUIRED",
+      });
+    }
+    next();
+  });
+
   const publicRegistrationSchema = z
     .object({
       student: insertStudentSchema.extend({
@@ -77,15 +157,21 @@ export function registerRoutes(
   // Authentication routes
   app.post("/api/auth/login", async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const { username, password } = z.object({
+        username: z.string().trim().min(1).max(50),
+        password: z.string().min(1).max(128),
+      }).strict().parse(req.body);
       const user = await storage.validateAdminCredentials(username, password);
       if (!user) {
         return res.status(401).json({ error: "Credenciales inválidas" });
       }
-      req.session.user = user;
-      res.json({ user: { id: user.id, username: user.username, role: user.role } });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      req.session.user = toSessionAdminUser(user);
+      res.json({ user: toPublicAdminUser(user) });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(401).json({ error: "Credenciales inválidas" });
+      }
+      res.status(500).json({ error: "Error al iniciar sesión" });
     }
   });
 
@@ -98,11 +184,41 @@ export function registerRoutes(
     });
   });
 
-  app.get("/api/auth/me", (req, res) => {
-    if (!req.session?.user) {
-      return res.status(401).json({ error: "No autenticado" });
+  app.get("/api/auth/me", requireSession, (req: AuthenticatedRequest, res) => {
+    res.json({ user: toPublicAdminUser(req.user!) });
+  });
+
+  app.post("/api/auth/change-password", requireSession, async (req: AuthenticatedRequest, res) => {
+    try {
+      const input = z.object({
+        currentPassword: z.string().min(1).max(128),
+        newPassword: z.string().min(8).max(128),
+      }).strict().parse(req.body);
+      const updated = await storage.changeAdminPassword(
+        req.user!.id,
+        input.currentPassword,
+        input.newPassword,
+      );
+      req.session.user = toSessionAdminUser(updated);
+      res.json({ user: toPublicAdminUser(updated) });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: "Datos de contraseña inválidos", code: "VALIDATION_ERROR" });
+      }
+      if (error instanceof AdminUserManagementError) {
+        return res.status(adminErrorStatus(error)).json({ error: error.message, code: error.code });
+      }
+      res.status(500).json({ error: "Error al cambiar la contraseña" });
     }
-    res.json({ user: req.session.user });
+  });
+
+  app.get("/api/admin/users", requireSuperadmin, async (_req, res) => {
+    try {
+      const users = await storage.listAdminUsers();
+      res.json(users.map(toPublicAdminUser));
+    } catch {
+      res.status(500).json({ error: "Error al obtener usuarios" });
+    }
   });
 
   app.get("/api/public/students/dni/:dni", async (req, res) => {

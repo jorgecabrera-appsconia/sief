@@ -15,6 +15,20 @@
       "when": 1794508538256,
       "tag": "0001_deployment_hardening_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794576903855,
+      "tag": "0002_hard_namor",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794576946287,
+      "tag": "0003_chubby_dormammu",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,5 @@
-import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -60,12 +61,36 @@ export const inscriptions = pgTable("inscriptions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const adminUsers = pgTable("admin_users", {
+export const adminUsers = pgTable(
+  "admin_users",
+  {
+    id: serial("id").primaryKey(),
+    username: text("username").notNull().unique(),
+    password: text("password").notNull(),
+    role: text("role").notNull().default("admin"),
+    isActive: boolean("is_active").notNull().default(true),
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
+    sessionVersion: integer("session_version").notNull().default(1),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "admin_users_role_check",
+      sql`${table.role} in ('admin', 'superadmin')`,
+    ),
+  ],
+);
+
+export const adminUserAuditLog = pgTable("admin_user_audit_log", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
-  role: text("role").notNull().default("admin"),
-  createdAt: timestamp("created_at").defaultNow(),
+  actorUserId: integer("actor_user_id").notNull(),
+  actorUsername: text("actor_username").notNull(),
+  targetUserId: integer("target_user_id"),
+  targetUsername: text("target_username").notNull(),
+  action: text("action").notNull(),
+  changes: jsonb("changes").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 export const subjects = pgTable("subjects", {
@@ -164,6 +189,7 @@ export type Inscription = typeof inscriptions.$inferSelect;
 
 export type InsertAdminUser = z.infer<typeof insertAdminUserSchema>;
 export type AdminUser = typeof adminUsers.$inferSelect;
+export type AdminUserAuditEntry = typeof adminUserAuditLog.$inferSelect;
 
 export type InsertSubject = z.infer<typeof insertSubjectSchema>;
 export type Subject = typeof subjects.$inferSelect;
