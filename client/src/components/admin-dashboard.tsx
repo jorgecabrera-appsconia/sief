@@ -15,7 +15,9 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { StatisticsModal } from "./statistics-modal";
-import { LogOut, Download, FileText, Search, Filter, Edit, Check, X, Plus, Trash2, Pencil, FileSpreadsheet, AlertTriangle, Wrench, WrenchIcon, ChevronDown, ChevronUp, Eye, EyeOff, Copy } from "lucide-react";
+import AdminUsersPanel from "./admin-users-panel";
+import PasswordChangeForm from "./password-change-form";
+import { LogOut, Download, FileText, Search, Filter, Edit, Check, X, Plus, Trash2, Pencil, FileSpreadsheet, AlertTriangle, Wrench, WrenchIcon, ChevronDown, ChevronUp, Eye, EyeOff, Copy, KeyRound } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -138,13 +140,14 @@ const SubjectWithCorrelativities = ({ exam, allSubjects }: { exam: any; allSubje
 interface AdminDashboardProps {
   user: any;
   onLogout: () => void;
+  onUserUpdated: (user: any) => void;
 }
 
 /**
  * Complete administrative dashboard with exam schedules and inscription management
  * Features filtering, search, Excel export, and PDF generation capabilities
  */
-export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
+export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminDashboardProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterTurno, setFilterTurno] = useState("");
   const [filterProfesorado, setFilterProfesorado] = useState("");
@@ -156,6 +159,7 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
   const [filterExamCall, setFilterExamCall] = useState("all");
   const [filterCondition, setFilterCondition] = useState("");
   const [isExamFormOpen, setIsExamFormOpen] = useState(false);
+  const [isPasswordFormOpen, setIsPasswordFormOpen] = useState(false);
   const [editingExam, setEditingExam] = useState<ExamSchedule | null>(null);
   const [isSubjectFormOpen, setIsSubjectFormOpen] = useState(false);
   const [subjectFormSource, setSubjectFormSource] = useState<"catalog" | "exam">("catalog");
@@ -1206,7 +1210,7 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {user.username === 'jcabrera' && (
+              {user.role === 'superadmin' && (
                 <Button
                   onClick={() => toggleMaintenanceMutation.mutate(!maintenanceMode)}
                   variant={maintenanceMode ? "destructive" : "secondary"}
@@ -1218,6 +1222,15 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                   {maintenanceMode ? "Desactivar Mantenimiento" : "Activar Mantenimiento"}
                 </Button>
               )}
+              <Button
+                onClick={() => setIsPasswordFormOpen(true)}
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-2"
+              >
+                <KeyRound className="h-4 w-4" />
+                Cambiar mi contraseña
+              </Button>
               <Button
                 onClick={() => logoutMutation.mutate()}
                 variant="outline"
@@ -1234,11 +1247,12 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs defaultValue="inscriptions" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className={user.role === "superadmin" ? "grid w-full grid-cols-2 lg:grid-cols-5" : "grid w-full grid-cols-2 lg:grid-cols-4"}>
             <TabsTrigger value="inscriptions">Gestión de Inscripciones</TabsTrigger>
             <TabsTrigger value="exams">Mesas de Examen</TabsTrigger>
             <TabsTrigger value="exam-calls">Llamados de Examen</TabsTrigger>
             <TabsTrigger value="subjects">Materias</TabsTrigger>
+            {user.role === "superadmin" && <TabsTrigger value="users">Usuarios</TabsTrigger>}
           </TabsList>
 
           {/* Inscriptions Tab */}
@@ -2154,7 +2168,34 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
               </CardContent>
             </Card>
           </TabsContent>
+
+          {user.role === "superadmin" && (
+            <TabsContent value="users" className="space-y-6">
+              <AdminUsersPanel
+                currentUser={user}
+                onCurrentUserUpdated={onUserUpdated}
+              />
+            </TabsContent>
+          )}
         </Tabs>
+
+        <Dialog open={isPasswordFormOpen} onOpenChange={setIsPasswordFormOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Cambiar mi contraseña</DialogTitle>
+              <DialogDescription>
+                Al guardar se cerrarán las demás sesiones abiertas de su usuario.
+              </DialogDescription>
+            </DialogHeader>
+            <PasswordChangeForm
+              onCancel={() => setIsPasswordFormOpen(false)}
+              onSuccess={(updatedUser) => {
+                onUserUpdated(updatedUser);
+                setIsPasswordFormOpen(false);
+              }}
+            />
+          </DialogContent>
+        </Dialog>
 
         {/* Exam Form Modal */}
         <Dialog open={isExamFormOpen} onOpenChange={setIsExamFormOpen}>

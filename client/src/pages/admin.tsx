@@ -2,6 +2,9 @@ import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AdminLogin from "@/components/admin-login";
 import AdminDashboard from "@/components/admin-dashboard";
+import PasswordChangeForm from "@/components/password-change-form";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getQueryFn } from "@/lib/queryClient";
 
 interface AdminProps {
@@ -38,11 +41,41 @@ export default function Admin({ user: propUser, onLogout }: AdminProps) {
     );
   }
 
-  const currentUser = user || authUser;
+  const currentUser = user || (authUser as any)?.user || authUser;
 
   if (!currentUser) {
     return <AdminLogin onLoginSuccess={handleLoginSuccess} />;
   }
 
-  return <AdminDashboard user={currentUser} onLogout={handleLogout} />;
+  if (currentUser.mustChangePassword) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Cambio de contraseña obligatorio</CardTitle>
+            <CardDescription>
+              Debe definir una nueva contraseña antes de continuar al panel de administración.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <PasswordChangeForm
+              onSuccess={(updatedUser) => setUser(updatedUser)}
+              submitLabel="Guardar y continuar"
+            />
+            <Button type="button" variant="ghost" className="w-full" onClick={handleLogout}>
+              Cerrar sesión
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <AdminDashboard
+      user={currentUser}
+      onLogout={handleLogout}
+      onUserUpdated={(updatedUser) => setUser(updatedUser)}
+    />
+  );
 }
