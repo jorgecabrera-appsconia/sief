@@ -4,7 +4,7 @@ import {
   storage as defaultStorage,
   type IStorage,
 } from "./storage";
-import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertAdminUserSchema, insertExamCallSchema, insertSubjectSchema, type ExamSchedule, type Inscription } from "@shared/schema";
+import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertAdminUserSchema, insertExamCallSchema, insertSubjectSchema, type ExamSchedule, type Inscription } from "../shared/schema";
 import { z } from "zod";
 import { toPublicTeacherStudent } from "./security";
 

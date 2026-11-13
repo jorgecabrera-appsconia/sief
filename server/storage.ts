@@ -1,4 +1,4 @@
-import { students, examSchedules, inscriptions, adminUsers, subjects, correlativities, teachers, systemSettings, permissionCounter, examCalls, rateLimitBuckets, type Student, type InsertStudent, type ExamSchedule, type InsertExamSchedule, type Inscription, type InsertInscription, type AdminUser, type InsertAdminUser, type Subject, type InsertSubject, type Teacher, type InsertTeacher, type SystemSetting, type InsertSystemSetting, type ExamCall, type InsertExamCall } from "@shared/schema";
+import { students, examSchedules, inscriptions, adminUsers, subjects, correlativities, teachers, systemSettings, permissionCounter, examCalls, rateLimitBuckets, type Student, type InsertStudent, type ExamSchedule, type InsertExamSchedule, type Inscription, type InsertInscription, type AdminUser, type InsertAdminUser, type Subject, type InsertSubject, type Teacher, type InsertTeacher, type SystemSetting, type InsertSystemSetting, type ExamCall, type InsertExamCall } from "../shared/schema";
 import { morningExamSchedules } from './exam-schedules-data';
 import { db } from "./db";
 import { eq, and, sql, isNotNull, ilike, inArray } from "drizzle-orm";

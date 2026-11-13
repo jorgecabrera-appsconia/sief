@@ -32,4 +32,11 @@ describe("Vercel API routing", () => {
       { source: "/((?!api/).*)", destination: "/index.html" },
     ]);
   });
+
+  it("does not use tsconfig path aliases in the Vercel runtime graph", () => {
+    for (const file of ["db.ts", "routes.ts", "storage.ts"]) {
+      const source = readFileSync(resolve(process.cwd(), "server", file), "utf8");
+      expect(source).not.toContain('"@shared/schema"');
+    }
+  });
 });
