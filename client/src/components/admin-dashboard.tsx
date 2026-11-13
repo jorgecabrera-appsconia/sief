@@ -158,7 +158,10 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
   const [isExamFormOpen, setIsExamFormOpen] = useState(false);
   const [editingExam, setEditingExam] = useState<ExamSchedule | null>(null);
   const [isSubjectFormOpen, setIsSubjectFormOpen] = useState(false);
+  const [subjectFormSource, setSubjectFormSource] = useState<"catalog" | "exam">("catalog");
   const [newSubjectName, setNewSubjectName] = useState("");
+  const [newSubjectProfesorado, setNewSubjectProfesorado] = useState("");
+  const [newSubjectYear, setNewSubjectYear] = useState("");
   const [newSubjectTurno, setNewSubjectTurno] = useState("");
   const [newSubjectDivision, setNewSubjectDivision] = useState("");
   const [editingSubject, setEditingSubject] = useState<{ id: number; name: string; profesorado: string; year: number } | null>(null);
@@ -536,25 +539,29 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
     },
   });
 
-  // Create subject (materia) inline from the mesa form
+  // Create a subject from the catalog or the exam form.
   const createSubjectMutation = useMutation({
     mutationFn: async (subjectData: { name: string; profesorado: string; year: number }) => {
       const res = await apiRequest("POST", "/api/subjects", subjectData);
       return await res.json() as { subject: { id: number; name: string; profesorado: string; year: number }; created: boolean };
     },
-    onSuccess: async (data, variables) => {
+    onSuccess: async (data) => {
       await queryClient.invalidateQueries({ queryKey: ["/api/subjects"] });
-      // Apply the chosen profesorado/año to the mesa form and select the new materia.
-      form.setValue("profesorado", data.subject.profesorado);
-      form.setValue("year", data.subject.year);
-      if (newSubjectTurno) form.setValue("turno", newSubjectTurno);
-      if (newSubjectDivision) form.setValue("division", newSubjectDivision);
-      form.setValue("subject", data.subject.name);
+      if (subjectFormSource === "exam") {
+        form.setValue("profesorado", data.subject.profesorado);
+        form.setValue("year", data.subject.year);
+        if (newSubjectTurno) form.setValue("turno", newSubjectTurno);
+        if (newSubjectDivision) form.setValue("division", newSubjectDivision);
+        form.setValue("subject", data.subject.name);
+      } else {
+        setSubjectFilterProfesorado(data.subject.profesorado);
+        setSubjectSearch("");
+      }
       toast({
         title: data.created ? "Materia creada correctamente" : "La materia ya existía",
-        description: data.created
-          ? `Se agregó "${data.subject.name}" y quedó seleccionada.`
-          : `Se seleccionó la materia existente "${data.subject.name}".`,
+        description: subjectFormSource === "exam"
+          ? `La materia "${data.subject.name}" quedó seleccionada en la mesa.`
+          : `"${data.subject.name}" · ${data.subject.profesorado} · ${data.subject.year}° año.`,
       });
       setIsSubjectFormOpen(false);
       setNewSubjectName("");
@@ -2010,7 +2017,21 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
           <TabsContent value="subjects" className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>Catálogo de Materias</CardTitle>
+                <CardTitle className="flex flex-wrap items-center justify-between gap-3">
+                  <span>Catálogo de Materias</span>
+                  <Button type="button" size="sm" data-testid="button-add-subject" onClick={() => {
+                    setSubjectFormSource("catalog");
+                    setNewSubjectName("");
+                    setNewSubjectProfesorado(subjectFilterProfesorado === "all" ? "" : subjectFilterProfesorado);
+                    setNewSubjectYear("");
+                    setNewSubjectTurno("");
+                    setNewSubjectDivision("");
+                    setIsSubjectFormOpen(true);
+                  }}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Agregar Materia
+                  </Button>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-gray-600 mb-6">
@@ -2289,7 +2310,10 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                           size="sm"
                           className="mt-1 h-auto p-0 text-xs text-primary hover:text-primary/80"
                           onClick={() => {
+                            setSubjectFormSource("exam");
                             setNewSubjectName("");
+                            setNewSubjectProfesorado(form.getValues("profesorado") || "");
+                            setNewSubjectYear(form.getValues("year")?.toString() || "");
                             setNewSubjectTurno(form.getValues("turno") || "");
                             setNewSubjectDivision(form.getValues("division") || "");
                             setIsSubjectFormOpen(true);
@@ -2509,8 +2533,8 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
               <div className="space-y-2">
                 <Label>Profesorado</Label>
                 <Select
-                  value={form.watch("profesorado")}
-                  onValueChange={(value) => form.setValue("profesorado", value)}
+                  value={newSubjectProfesorado}
+                  onValueChange={setNewSubjectProfesorado}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Seleccionar profesorado" />
@@ -2527,8 +2551,8 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                 <div className="space-y-2">
                   <Label>Año</Label>
                   <Select
-                    value={form.watch("year")?.toString()}
-                    onValueChange={(value) => form.setValue("year", parseInt(value))}
+                    value={newSubjectYear}
+                    onValueChange={setNewSubjectYear}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Año" />
@@ -2542,7 +2566,7 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                   </Select>
                 </div>
 
-                <div className="space-y-2">
+                {subjectFormSource === "exam" && <div className="space-y-2">
                   <Label>Turno</Label>
                   <Select value={newSubjectTurno} onValueChange={setNewSubjectTurno}>
                     <SelectTrigger>
@@ -2554,10 +2578,10 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                       <SelectItem value="tarde">Tarde</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
+                </div>}
               </div>
 
-              <div className="space-y-2">
+              {subjectFormSource === "exam" && <><div className="space-y-2">
                 <Label>División</Label>
                 <Select value={newSubjectDivision} onValueChange={setNewSubjectDivision}>
                   <SelectTrigger>
@@ -2574,7 +2598,7 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
 
               <p className="text-xs text-muted-foreground">
                 El turno y la división se aplican solo a esta mesa, no se guardan en la materia.
-              </p>
+              </p></>}
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button
@@ -2589,8 +2613,8 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                   disabled={createSubjectMutation.isPending}
                   onClick={() => {
                     const name = newSubjectName.trim();
-                    const profesorado = form.getValues("profesorado");
-                    const year = form.getValues("year");
+                    const profesorado = newSubjectProfesorado;
+                    const year = Number(newSubjectYear);
                     if (!name) {
                       toast({ title: "Ingresá el nombre de la materia", variant: "destructive" });
                       return;
