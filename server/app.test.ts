@@ -1,7 +1,7 @@
 import session from "express-session";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import type { IStorage } from "./storage";
+import { AdminUserManagementError, type IStorage } from "./storage";
 import { createApp } from "./app";
 
 function createStorage(overrides: Partial<IStorage> = {}): IStorage {
@@ -208,6 +208,141 @@ describe("createApp", () => {
     expect(changed.status).toBe(200);
     expect(changed.body.user.mustChangePassword).toBe(false);
     expect((await agent.get("/api/students")).status).toBe(200);
+  });
+
+  it("supports the complete superadmin user-management lifecycle", async () => {
+    const now = new Date("2026-11-13T12:00:00.000Z");
+    const superadmin = {
+      id: 7, username: "jcabrera", password: "stored-hash", role: "superadmin",
+      isActive: true, mustChangePassword: false, sessionVersion: 1,
+      createdAt: now, updatedAt: now,
+    };
+    const managedUser = {
+      id: 8, username: "nuevo.usuario", password: "another-stored-hash", role: "admin",
+      isActive: true, mustChangePassword: true, sessionVersion: 1,
+      createdAt: now, updatedAt: now,
+    };
+    const storage = createStorage({
+      validateAdminCredentials: async () => superadmin,
+      getAdminUserById: async () => superadmin,
+      createManagedAdminUser: async (input) => ({ ...managedUser, ...input, password: "hashed-only" }),
+      updateManagedAdminUser: async (_id, input) => ({ ...managedUser, ...input, password: "hashed-only", sessionVersion: 2 }),
+      resetManagedAdminPassword: async (_id, input) => ({
+        ...managedUser,
+        password: "new-hash",
+        mustChangePassword: input.mustChangePassword,
+        sessionVersion: 2,
+      }),
+      deleteManagedAdminUser: async () => undefined,
+      listAdminUserAudit: async () => ({
+        total: 1,
+        entries: [{
+          id: 1,
+          actorUserId: 7,
+          actorUsername: "jcabrera",
+          targetUserId: 8,
+          targetUsername: "nuevo.usuario",
+          action: "created",
+          changes: { role: "admin" },
+          createdAt: now,
+        }],
+      }),
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+    await agent.post("/api/auth/login").send({ username: "jcabrera", password: "valid-password" });
+
+    const created = await agent.post("/api/admin/users").send({
+      username: "  Nuevo.Usuario  ",
+      password: "temporary-password",
+      role: "admin",
+      isActive: true,
+      mustChangePassword: true,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.username).toBe("nuevo.usuario");
+    expect(JSON.stringify(created.body)).not.toContain("hash");
+
+    const updated = await agent.patch("/api/admin/users/8").send({ role: "superadmin" });
+    expect(updated.status).toBe(200);
+    expect(updated.body.role).toBe("superadmin");
+
+    const reset = await agent.put("/api/admin/users/8/password").send({
+      newPassword: "replacement-password",
+      mustChangePassword: false,
+    });
+    expect(reset.status).toBe(200);
+    expect(reset.body.mustChangePassword).toBe(false);
+    expect(JSON.stringify(reset.body)).not.toContain("new-hash");
+
+    const audit = await agent.get("/api/admin/users/audit?limit=20&offset=0");
+    expect(audit.status).toBe(200);
+    expect(audit.body.total).toBe(1);
+    expect(audit.body.entries[0].action).toBe("created");
+
+    expect((await agent.delete("/api/admin/users/8")).status).toBe(204);
+  });
+
+  it("returns a conflict when an operation would remove the last active superadmin", async () => {
+    const superadmin = {
+      id: 7, username: "jcabrera", password: "stored-hash", role: "superadmin",
+      isActive: true, mustChangePassword: false, sessionVersion: 1,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const storage = createStorage({
+      validateAdminCredentials: async () => superadmin,
+      getAdminUserById: async () => superadmin,
+      updateManagedAdminUser: async () => {
+        throw new AdminUserManagementError(
+          "LAST_SUPERADMIN",
+          "Debe existir al menos un superadministrador activo",
+        );
+      },
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+    await agent.post("/api/auth/login").send({ username: "jcabrera", password: "valid-password" });
+
+    const response = await agent.patch("/api/admin/users/7").send({ role: "admin" });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("LAST_SUPERADMIN");
+  });
+
+  it("invalidates an open session when its version changes", async () => {
+    let sessionVersion = 1;
+    const currentUser = () => ({
+      id: 1, username: "bedeltm", password: "stored-hash", role: "admin",
+      isActive: true, mustChangePassword: false, sessionVersion,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const storage = createStorage({
+      validateAdminCredentials: async () => currentUser(),
+      getAdminUserById: async () => currentUser(),
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+    await agent.post("/api/auth/login").send({ username: "bedeltm", password: "valid-password" });
+
+    sessionVersion = 2;
+    const response = await agent.get("/api/students");
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe("SESSION_INVALID");
+  });
+
+  it("authorizes maintenance mode by superadmin role instead of username", async () => {
+    const superadmin = {
+      id: 9, username: "otra.persona", password: "stored-hash", role: "superadmin",
+      isActive: true, mustChangePassword: false, sessionVersion: 1,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const storage = createStorage({
+      validateAdminCredentials: async () => superadmin,
+      getAdminUserById: async () => superadmin,
+      setSystemSetting: async () => ({ id: 1, key: "maintenance_mode", value: "true", updatedBy: "otra.persona", updatedAt: new Date() }),
+    } as Partial<IStorage>);
+    const agent = request.agent(buildTestApp(storage));
+    await agent.post("/api/auth/login").send({ username: "otra.persona", password: "valid-password" });
+
+    expect((await agent.post("/api/maintenance/toggle").send({ enabled: true })).status).toBe(200);
   });
 
   it("allows authenticated cloning even when the public read limit is exhausted", async () => {

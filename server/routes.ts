@@ -221,6 +221,115 @@ export function registerRoutes(
     }
   });
 
+  const usernameSchema = z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(3)
+    .max(50)
+    .regex(/^[a-z0-9._-]+$/, "El usuario contiene caracteres no permitidos");
+  const passwordSchema = z.string().min(8).max(128);
+  const roleSchema = z.enum(["admin", "superadmin"]);
+  const createAdminUserSchema = z.object({
+    username: usernameSchema,
+    password: passwordSchema,
+    role: roleSchema,
+    isActive: z.boolean().default(true),
+    mustChangePassword: z.boolean().default(false),
+  }).strict();
+  const updateAdminUserSchema = z.object({
+    username: usernameSchema.optional(),
+    role: roleSchema.optional(),
+    isActive: z.boolean().optional(),
+    mustChangePassword: z.boolean().optional(),
+  }).strict().refine((input) => Object.keys(input).length > 0, "Debe indicar al menos un cambio");
+  const resetPasswordSchema = z.object({
+    newPassword: passwordSchema,
+    mustChangePassword: z.boolean(),
+  }).strict();
+  const adminUserIdSchema = z.coerce.number().int().positive();
+
+  const sendAdminUserError = (error: unknown, res: Response, fallback: string) => {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: "Datos inválidos", code: "VALIDATION_ERROR" });
+    }
+    if (error instanceof AdminUserManagementError) {
+      return res.status(adminErrorStatus(error)).json({ error: error.message, code: error.code });
+    }
+    console.error(fallback, error);
+    return res.status(500).json({ error: fallback });
+  };
+
+  app.post("/api/admin/users", requireSuperadmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const input = createAdminUserSchema.parse(req.body);
+      const created = await storage.createManagedAdminUser(input, {
+        id: req.user!.id,
+        username: req.user!.username,
+      });
+      res.status(201).json(toPublicAdminUser(created));
+    } catch (error) {
+      sendAdminUserError(error, res, "Error al crear usuario");
+    }
+  });
+
+  app.patch("/api/admin/users/:id", requireSuperadmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = adminUserIdSchema.parse(req.params.id);
+      const input = updateAdminUserSchema.parse(req.body);
+      const updated = await storage.updateManagedAdminUser(id, input, {
+        id: req.user!.id,
+        username: req.user!.username,
+      });
+      if (updated.id === req.user!.id) {
+        req.session.user = toSessionAdminUser(updated);
+      }
+      res.json(toPublicAdminUser(updated));
+    } catch (error) {
+      sendAdminUserError(error, res, "Error al actualizar usuario");
+    }
+  });
+
+  app.put("/api/admin/users/:id/password", requireSuperadmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = adminUserIdSchema.parse(req.params.id);
+      const input = resetPasswordSchema.parse(req.body);
+      const updated = await storage.resetManagedAdminPassword(id, input, {
+        id: req.user!.id,
+        username: req.user!.username,
+      });
+      res.json(toPublicAdminUser(updated));
+    } catch (error) {
+      sendAdminUserError(error, res, "Error al restablecer contraseña");
+    }
+  });
+
+  app.delete("/api/admin/users/:id", requireSuperadmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = adminUserIdSchema.parse(req.params.id);
+      await storage.deleteManagedAdminUser(id, {
+        id: req.user!.id,
+        username: req.user!.username,
+      });
+      res.status(204).send();
+    } catch (error) {
+      sendAdminUserError(error, res, "Error al eliminar usuario");
+    }
+  });
+
+  app.get("/api/admin/users/audit", requireSuperadmin, async (req, res) => {
+    try {
+      const query = z.object({
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+      }).parse(req.query);
+      const result = await storage.listAdminUserAudit(query.limit, query.offset);
+      res.json(result);
+    } catch (error) {
+      sendAdminUserError(error, res, "Error al obtener historial de usuarios");
+    }
+  });
+
   app.get("/api/public/students/dni/:dni", async (req, res) => {
     if (!/^\d{7,9}$/.test(req.params.dni)) {
       return res.status(400).json({ message: "DNI inválido" });
@@ -924,14 +1033,10 @@ export function registerRoutes(
     }
   });
 
-  app.post("/api/maintenance/toggle", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post("/api/maintenance/toggle", requireSuperadmin, async (req: AuthenticatedRequest, res) => {
     try {
-      if (req.user?.username !== 'jcabrera') {
-        return res.status(403).json({ error: "Solo el superadministrador puede activar/desactivar el modo mantenimiento" });
-      }
-
-      const { enabled } = req.body;
-      await storage.setSystemSetting('maintenance_mode', enabled ? 'true' : 'false', req.user.username);
+      const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(req.body);
+      await storage.setSystemSetting('maintenance_mode', enabled ? 'true' : 'false', req.user!.username);
       
       res.json({ 
         success: true, 
@@ -939,6 +1044,9 @@ export function registerRoutes(
         message: enabled ? "Modo mantenimiento activado" : "Modo mantenimiento desactivado"
       });
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: "Estado de mantenimiento inválido" });
+      }
       res.status(500).json({ message: "Error al cambiar estado de mantenimiento" });
     }
   });
