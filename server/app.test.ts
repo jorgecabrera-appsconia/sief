@@ -94,6 +94,27 @@ describe("createApp", () => {
     expect(students.status).toBe(200);
   });
 
+  it("allows authenticated cloning even when the public read limit is exhausted", async () => {
+    const cloneExamCall = vi.fn(async () => ({
+      examCall: { id: 2, name: "Copia", description: null, startDate: "2027-01-01", endDate: "2027-01-02", isActive: false, createdAt: new Date() },
+      clonedSchedules: 150,
+    }));
+    const storage = createStorage({
+      consumeRateLimit: async (key) => key.startsWith("public-read:") ? 301 : 1,
+      validateAdminCredentials: async () => ({ id: 1, username: "admin", password: "hash", role: "admin", createdAt: new Date() }),
+      cloneExamCall,
+    });
+    const agent = request.agent(buildTestApp(storage));
+
+    expect((await agent.get("/api/exam-calls")).status).toBe(429);
+    expect((await agent.post("/api/auth/login").send({ username: "admin", password: "valid-password" })).status).toBe(200);
+    const response = await agent.post("/api/exam-calls/1/clone").send({ name: "Copia", startDate: "2027-01-01", endDate: "2027-01-02" });
+    expect(response.status).toBe(201);
+    expect(response.body.clonedSchedules).toBe(150);
+    expect(cloneExamCall).toHaveBeenCalledOnce();
+    expect((await agent.get("/api/exam-calls")).status).toBe(200);
+  });
+
   it("destroys the authenticated session on logout", async () => {
     const storage = createStorage({
       validateAdminCredentials: async () =>

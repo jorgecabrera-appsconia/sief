@@ -1007,55 +1007,11 @@ export function registerRoutes(
         return res.status(400).json({ message: "Nombre, fecha de inicio y fecha de fin son requeridos" });
       }
       
-      // Get source exam call
-      const sourceCall = await storage.getExamCall(sourceId);
-      if (!sourceCall) {
+      const result = await storage.cloneExamCall(sourceId, { name, startDate, endDate });
+      if (!result) {
         return res.status(404).json({ message: "Llamado de examen origen no encontrado" });
       }
-      
-      // Get all exam schedules from source call (prefer examCallId, fallback to date range)
-      const allSchedules = await storage.getAllExamSchedules();
-      const sourceSchedules = allSchedules.filter(exam => {
-        if (exam.examCallId != null) return exam.examCallId === sourceId;
-        if (!sourceCall.startDate || !sourceCall.endDate || !exam.date) return false;
-        return exam.date >= sourceCall.startDate && exam.date <= sourceCall.endDate;
-      });
-      
-      // Create new exam call
-      const newCall = await storage.createExamCall({
-        name,
-        startDate,
-        endDate,
-        isActive: false,
-      });
-      
-      // Clone all schedules with the first date of the new period
-      const clonedSchedules = [];
-      for (const schedule of sourceSchedules) {
-        const clonedSchedule = await storage.createExamSchedule({
-          subject: schedule.subject,
-          year: schedule.year,
-          profesorado: schedule.profesorado,
-          turno: schedule.turno,
-          division: schedule.division,
-          date: startDate,
-          time: schedule.time,
-          teacher: schedule.teacher,
-          presidente: schedule.presidente,
-          vocal1: schedule.vocal1,
-          vocal2: schedule.vocal2,
-          vocalSuplente: schedule.vocalSuplente,
-          registrationOpen: true,
-          period: newCall.name,
-          examCallId: newCall.id,
-        });
-        clonedSchedules.push(clonedSchedule);
-      }
-      
-      res.status(201).json({
-        examCall: newCall,
-        clonedSchedules: clonedSchedules.length,
-      });
+      res.status(201).json(result);
     } catch (error: any) {
       console.error("Error cloning exam call:", error);
       res.status(500).json({ message: "Error al clonar llamado de examen" });

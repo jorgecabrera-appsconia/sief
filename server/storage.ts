@@ -71,6 +71,7 @@ export interface IStorage {
   getExamCall(id: number): Promise<ExamCall | undefined>;
   getActiveExamCall(): Promise<ExamCall | undefined>;
   createExamCall(examCall: InsertExamCall): Promise<ExamCall>;
+  cloneExamCall(sourceId: number, input: { name: string; startDate: string; endDate: string }): Promise<{ examCall: ExamCall; clonedSchedules: number } | undefined>;
   updateExamCall(id: number, examCall: Partial<InsertExamCall>): Promise<ExamCall | undefined>;
   deleteExamCall(id: number): Promise<boolean>;
   setActiveExamCall(id: number): Promise<ExamCall | undefined>;
@@ -680,6 +681,35 @@ export class DatabaseStorage implements IStorage {
       .values(insertExamCall)
       .returning();
     return examCall;
+  }
+
+  async cloneExamCall(sourceId: number, input: { name: string; startDate: string; endDate: string }) {
+    return db.transaction(async (tx) => {
+      const [source] = await tx.select().from(examCalls).where(eq(examCalls.id, sourceId));
+      if (!source) return undefined;
+
+      const [examCall] = await tx.insert(examCalls).values({
+        name: input.name,
+        startDate: input.startDate,
+        endDate: input.endDate,
+        isActive: false,
+      }).returning();
+
+      const copied = await tx.execute(sql`
+        WITH copied AS (
+          INSERT INTO exam_schedules
+            (subject, year, profesorado, turno, division, date, time, teacher,
+             presidente, vocal1, vocal2, vocal_suplente, registration_open, period, exam_call_id)
+          SELECT subject, year, profesorado, turno, division, ${input.startDate}, time, teacher,
+                 presidente, vocal1, vocal2, vocal_suplente, true, ${examCall.name}, ${examCall.id}
+          FROM exam_schedules
+          WHERE exam_call_id = ${sourceId}
+             OR (exam_call_id IS NULL AND date >= ${source.startDate} AND date <= ${source.endDate})
+          RETURNING 1
+        ) SELECT count(*)::int AS count FROM copied
+      `);
+      return { examCall, clonedSchedules: Number(copied.rows[0].count) };
+    });
   }
 
   async updateExamCall(id: number, updateData: Partial<InsertExamCall>): Promise<ExamCall | undefined> {

@@ -47,6 +47,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
+  const limitPublicReads = createRateLimitMiddleware({
+    scope: "public-read",
+    limit: 300,
+    windowMs: 15 * 60 * 1000,
+    consume: (key, expiresAt) => storage.consumeRateLimit(key, expiresAt),
+  });
   app.use(
     helmet({
       contentSecurityPolicy: isProduction
@@ -127,12 +133,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
       "/api/subjects",
       "/api/maintenance/status",
     ],
-    createRateLimitMiddleware({
-      scope: "public-read",
-      limit: 300,
-      windowMs: 15 * 60 * 1000,
-      consume: (key, expiresAt) => storage.consumeRateLimit(key, expiresAt),
-    }),
+    (req, res, next) => {
+      if (req.session.user || !["GET", "HEAD"].includes(req.method)) return next();
+      return limitPublicReads(req, res, next);
+    },
   );
   app.use(
     "/api/inscriptions/status",
