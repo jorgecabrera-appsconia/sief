@@ -11,17 +11,17 @@ export default async function handler(_request: Request, response: Response) {
   const completed: string[] = [];
 
   try {
-    await import("../shared/schema");
+    await import("../shared/schema.js");
     completed.push("schema");
-    await import("../server/security");
+    await import("../server/security.js");
     completed.push("security");
-    await import("../server/db");
+    await import("../server/db.js");
     completed.push("database-module");
-    await import("../server/storage");
+    await import("../server/storage.js");
     completed.push("storage");
-    await import("../server/routes");
+    await import("../server/routes.js");
     completed.push("routes");
-    const { createApp } = await import("../server/app");
+    const { createApp } = await import("../server/app.js");
     completed.push("app-module");
     createApp();
     completed.push("app-created");

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { restoreVercelApiUrl } from "./vercel-request";
+import { restoreVercelApiUrl } from "./vercel-request.js";
 
 describe("Vercel API routing", () => {
   it("restores the Express API path and preserves public query parameters", () => {

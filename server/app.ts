@@ -7,11 +7,11 @@ import express, {
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import helmet from "helmet";
-import { pool } from "./db";
-import { registerRoutes } from "./routes";
-import { storage as defaultStorage, type IStorage } from "./storage";
-import { isAllowedMutationOrigin } from "./security";
-import { createRateLimitMiddleware } from "./rate-limit";
+import { pool } from "./db.js";
+import { registerRoutes } from "./routes.js";
+import { storage as defaultStorage, type IStorage } from "./storage.js";
+import { isAllowedMutationOrigin } from "./security.js";
+import { createRateLimitMiddleware } from "./rate-limit.js";
 
 export interface CreateAppOptions {
   storage?: IStorage;

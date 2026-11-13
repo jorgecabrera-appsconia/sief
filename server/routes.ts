@@ -3,10 +3,10 @@ import {
   RegistrationError,
   storage as defaultStorage,
   type IStorage,
-} from "./storage";
-import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertAdminUserSchema, insertExamCallSchema, insertSubjectSchema, type ExamSchedule, type Inscription } from "../shared/schema";
+} from "./storage.js";
+import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertAdminUserSchema, insertExamCallSchema, insertSubjectSchema, type ExamSchedule, type Inscription } from "../shared/schema.js";
 import { z } from "zod";
-import { toPublicTeacherStudent } from "./security";
+import { toPublicTeacherStudent } from "./security.js";
 
 declare module 'express-session' {
   interface SessionData {
