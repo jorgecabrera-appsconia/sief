@@ -22,6 +22,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { formatDateDDMMYY } from "@/lib/utils";
+import {
+  canManageExamConfiguration,
+  getVisibleAdminTabs,
+  type AdminRole,
+} from "@/lib/admin-permissions";
 import type { ExamSchedule, Inscription, Student, ExamCall } from "@shared/schema";
 
 // Form validation schema
@@ -197,6 +202,9 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
   const [inscriptionFilterTurno, setInscriptionFilterTurno] = useState("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const userRole = user.role as AdminRole;
+  const visibleTabs = getVisibleAdminTabs(userRole);
+  const canManageConfiguration = canManageExamConfiguration(userRole);
 
   // Exam form setup
   const form = useForm<ExamFormData>({
@@ -1244,12 +1252,30 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs defaultValue="inscriptions" className="space-y-6">
-          <TabsList className={user.role === "superadmin" ? "grid w-full grid-cols-2 lg:grid-cols-5" : "grid w-full grid-cols-2 lg:grid-cols-4"}>
-            <TabsTrigger value="inscriptions">Gestión de Inscripciones</TabsTrigger>
-            <TabsTrigger value="exams">Mesas de Examen</TabsTrigger>
-            <TabsTrigger value="exam-calls">Llamados de Examen</TabsTrigger>
-            <TabsTrigger value="subjects">Materias</TabsTrigger>
-            {user.role === "superadmin" && <TabsTrigger value="users">Usuarios</TabsTrigger>}
+          <TabsList
+            className={`grid w-full grid-cols-2 ${
+              visibleTabs.length === 5
+                ? "lg:grid-cols-5"
+                : visibleTabs.length === 4
+                  ? "lg:grid-cols-4"
+                  : "lg:grid-cols-2"
+            }`}
+          >
+            {visibleTabs.includes("inscriptions") && (
+              <TabsTrigger value="inscriptions">Gestión de Inscripciones</TabsTrigger>
+            )}
+            {visibleTabs.includes("exams") && (
+              <TabsTrigger value="exams">Mesas de Examen</TabsTrigger>
+            )}
+            {visibleTabs.includes("exam-calls") && (
+              <TabsTrigger value="exam-calls">Llamados de Examen</TabsTrigger>
+            )}
+            {visibleTabs.includes("subjects") && (
+              <TabsTrigger value="subjects">Materias</TabsTrigger>
+            )}
+            {visibleTabs.includes("users") && (
+              <TabsTrigger value="users">Usuarios</TabsTrigger>
+            )}
           </TabsList>
 
           {/* Inscriptions Tab */}
@@ -1669,16 +1695,23 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
-                  <span>Mesas de Examen</span>
+                  <span className="flex items-center gap-2">
+                    Mesas de Examen
+                    {!canManageConfiguration && <Badge variant="secondary">Solo lectura</Badge>}
+                  </span>
                   <div className="flex gap-2">
-                    <Button onClick={() => setIsExamFormOpen(true)} size="sm">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Nueva Mesa
-                    </Button>
-                    <Button onClick={() => setIsTeacherFormOpen(true)} variant="outline" size="sm" data-testid="button-new-teacher">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Nuevo Docente
-                    </Button>
+                    {canManageConfiguration && (
+                      <>
+                        <Button onClick={() => setIsExamFormOpen(true)} size="sm">
+                          <Plus className="h-4 w-4 mr-2" />
+                          Nueva Mesa
+                        </Button>
+                        <Button onClick={() => setIsTeacherFormOpen(true)} variant="outline" size="sm" data-testid="button-new-teacher">
+                          <Plus className="h-4 w-4 mr-2" />
+                          Nuevo Docente
+                        </Button>
+                      </>
+                    )}
                     <Button onClick={exportExamSchedulesToExcel} variant="outline" size="sm">
                       <Download className="h-4 w-4 mr-2" />
                       Exportar Excel
@@ -1797,7 +1830,9 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
                         <th className="text-left p-2 sm:p-3 text-sm sm:text-base hidden md:table-cell">Mesa</th>
                         <th className="text-left p-2 sm:p-3 text-sm sm:text-base">Turno</th>
                         <th className="text-left p-2 sm:p-3 text-sm sm:text-base hidden lg:table-cell">Llamado</th>
-                        <th className="text-left p-2 sm:p-3 text-sm sm:text-base">Acciones</th>
+                        {canManageConfiguration && (
+                          <th className="text-left p-2 sm:p-3 text-sm sm:text-base">Acciones</th>
+                        )}
                       </tr>
                     </thead>
                     <tbody>
@@ -1825,8 +1860,9 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
                           <td className="p-2 sm:p-3 text-xs sm:text-sm text-gray-600 hidden lg:table-cell">
                             {getExamCallName(exam)}
                           </td>
-                          <td className="p-2 sm:p-3">
-                            <div className="flex gap-1 sm:gap-2">
+                          {canManageConfiguration && (
+                            <td className="p-2 sm:p-3">
+                              <div className="flex gap-1 sm:gap-2">
                               <Button
                                 onClick={() => {
                                   toggleVisibilityMutation.mutate({ 
@@ -1869,8 +1905,9 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
                               >
                                 <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
                               </Button>
-                            </div>
-                          </td>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -1887,7 +1924,8 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
           </TabsContent>
 
           {/* Exam Calls Management Tab */}
-          <TabsContent value="exam-calls" className="space-y-6">
+          {canManageConfiguration && (
+            <TabsContent value="exam-calls" className="space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
@@ -2022,10 +2060,12 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
                 )}
               </CardContent>
             </Card>
-          </TabsContent>
+            </TabsContent>
+          )}
 
           {/* Subjects (Materias) Tab */}
-          <TabsContent value="subjects" className="space-y-6">
+          {canManageConfiguration && (
+            <TabsContent value="subjects" className="space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex flex-wrap items-center justify-between gap-3">
@@ -2164,7 +2204,8 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
                 })()}
               </CardContent>
             </Card>
-          </TabsContent>
+            </TabsContent>
+          )}
 
           {user.role === "superadmin" && (
             <TabsContent value="users" className="space-y-6">
@@ -2194,6 +2235,8 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
           </DialogContent>
         </Dialog>
 
+        {canManageConfiguration && (
+          <>
         {/* Exam Form Modal */}
         <Dialog open={isExamFormOpen} onOpenChange={setIsExamFormOpen}>
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -2760,6 +2803,8 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
             </div>
           </DialogContent>
         </Dialog>
+          </>
+        )}
 
         {/* Inscription Edit Modal */}
         <Dialog open={isInscriptionFormOpen} onOpenChange={setIsInscriptionFormOpen}>
@@ -3088,6 +3133,8 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
           </DialogContent>
         </Dialog>
 
+        {canManageConfiguration && (
+          <>
         {/* Teacher Form Modal */}
         <Dialog open={isTeacherFormOpen} onOpenChange={setIsTeacherFormOpen}>
           <DialogContent className="max-w-md">
@@ -3462,6 +3509,8 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
             </div>
           </DialogContent>
         </Dialog>
+          </>
+        )}
       </div>
     </div>
   );

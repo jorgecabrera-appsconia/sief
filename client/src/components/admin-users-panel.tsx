@@ -22,8 +22,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-
-type AdminRole = "admin" | "superadmin";
+import type { AdminRole } from "@/lib/admin-permissions";
 
 interface ManagedAdminUser {
   id: number;
@@ -66,6 +65,12 @@ const actionLabels: Record<string, string> = {
   activated: "Activó",
   deactivated: "Desactivó",
   deleted: "Eliminó",
+};
+
+const roleLabels: Record<AdminRole, string> = {
+  bedel: "Bedel",
+  admin: "Administrador",
+  superadmin: "Superadministrador",
 };
 
 function formatDate(value: string | null) {
@@ -248,7 +253,7 @@ export default function AdminUsersPanel({
                         </TableCell>
                         <TableCell>
                           <Badge variant={user.role === "superadmin" ? "default" : "secondary"}>
-                            {user.role === "superadmin" ? "Superadministrador" : "Administrador"}
+                            {roleLabels[user.role]}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -362,6 +367,7 @@ export default function AdminUsersPanel({
               <Select value={createForm.role} onValueChange={(role: AdminRole) => setCreateForm({ ...createForm, role })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="bedel">Bedel</SelectItem>
                   <SelectItem value="admin">Administrador</SelectItem>
                   <SelectItem value="superadmin">Superadministrador</SelectItem>
                 </SelectContent>
@@ -394,6 +400,7 @@ export default function AdminUsersPanel({
               <Select value={editRole} disabled={editingUser.id === currentUser.id || isProtectedSuperadmin(editingUser)} onValueChange={(role: AdminRole) => setEditRole(role)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="bedel">Bedel</SelectItem>
                   <SelectItem value="admin">Administrador</SelectItem>
                   <SelectItem value="superadmin">Superadministrador</SelectItem>
                 </SelectContent>

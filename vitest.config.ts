@@ -11,7 +11,7 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./server/test/setup.ts"],
-    include: ["server/**/*.test.ts"],
+    include: ["server/**/*.test.ts", "client/src/**/*.test.ts"],
     clearMocks: true,
   },
 });
