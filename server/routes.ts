@@ -256,7 +256,7 @@ export function registerRoutes(
     if (error instanceof AdminUserManagementError) {
       return res.status(adminErrorStatus(error)).json({ error: error.message, code: error.code });
     }
-    console.error(fallback, error);
+    console.error(fallback, error instanceof Error ? error.name : "UnknownError");
     return res.status(500).json({ error: fallback });
   };
 

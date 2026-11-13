@@ -1,19 +1,20 @@
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AdminLogin from "@/components/admin-login";
 import AdminDashboard from "@/components/admin-dashboard";
 import PasswordChangeForm from "@/components/password-change-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getQueryFn } from "@/lib/queryClient";
+import { apiRequest, getQueryFn } from "@/lib/queryClient";
 
 interface AdminProps {
   user?: any;
-  onLogout?: () => void;
+  onLogout?: () => void | Promise<void>;
 }
 
 export default function Admin({ user: propUser, onLogout }: AdminProps) {
   const [user, setUser] = useState(propUser);
+  const queryClient = useQueryClient();
 
   // Check authentication status
   const { data: authUser, isLoading } = useQuery({
@@ -25,10 +26,19 @@ export default function Admin({ user: propUser, onLogout }: AdminProps) {
     setUser(userData);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (onLogout) {
+      await onLogout();
+    } else {
+      await apiRequest("POST", "/api/auth/logout", {});
+    }
     setUser(null);
-    if (onLogout) onLogout();
+    queryClient.setQueryData(["/api/auth/me"], null);
   };
+
+  const forcedLogoutMutation = useMutation({
+    mutationFn: handleLogout,
+  });
 
   if (isLoading) {
     return (
@@ -62,8 +72,14 @@ export default function Admin({ user: propUser, onLogout }: AdminProps) {
               onSuccess={(updatedUser) => setUser(updatedUser)}
               submitLabel="Guardar y continuar"
             />
-            <Button type="button" variant="ghost" className="w-full" onClick={handleLogout}>
-              Cerrar sesión
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              disabled={forcedLogoutMutation.isPending}
+              onClick={() => forcedLogoutMutation.mutate()}
+            >
+              {forcedLogoutMutation.isPending ? "Cerrando sesión..." : "Cerrar sesión"}
             </Button>
           </CardContent>
         </Card>

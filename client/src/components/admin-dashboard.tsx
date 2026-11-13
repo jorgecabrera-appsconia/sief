@@ -139,7 +139,7 @@ const SubjectWithCorrelativities = ({ exam, allSubjects }: { exam: any; allSubje
 
 interface AdminDashboardProps {
   user: any;
-  onLogout: () => void;
+  onLogout: () => void | Promise<void>;
   onUserUpdated: (user: any) => void;
 }
 
@@ -395,10 +395,7 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
   // Logout mutation
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest("POST", "/api/auth/logout", {});
-    },
-    onSuccess: () => {
-      onLogout();
+      await onLogout();
     },
   });
 

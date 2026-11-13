@@ -657,7 +657,7 @@ export class DatabaseStorage implements IStorage {
   async changeAdminPassword(id: number, currentPassword: string, newPassword: string): Promise<AdminUser> {
     const newPasswordHash = await hashPassword(newPassword);
     return db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`sief_admin_user_${id}`}, 0))`);
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('sief_admin_users', 0))`);
       const [target] = await tx.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
       if (!target) {
         throw new AdminUserManagementError("USER_NOT_FOUND", "Usuario no encontrado");
