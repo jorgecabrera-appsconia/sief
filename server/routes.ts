@@ -6,9 +6,10 @@ import {
   type AdminUserRole,
   type IStorage,
 } from "./storage.js";
-import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertExamCallSchema, insertSubjectSchema, type AdminUser, type ExamSchedule, type Inscription } from "../shared/schema.js";
+import { insertStudentSchema, insertExamScheduleSchema, insertInscriptionSchema, insertExamCallSchema, insertSubjectSchema, type AdminUser, type ExamSchedule } from "../shared/schema.js";
 import { z } from "zod";
 import { toPublicTeacherStudent } from "./security.js";
+import { loadActiveCallInscriptions } from "./inscription-hydration.js";
 
 declare module 'express-session' {
   interface SessionData {
@@ -627,44 +628,9 @@ export function registerRoutes(
   // Inscription routes
   app.get("/api/inscriptions", requireOperationalRole, async (req, res) => {
     try {
-      let inscriptions: Inscription[];
-      if (req.query.activeOnly === "true") {
-        const activeCall = await storage.getActiveExamCall();
-        if (activeCall) {
-          inscriptions = await storage.getInscriptionsByExamCallId(activeCall.id);
-        } else {
-          inscriptions = [];
-        }
-      } else {
-        inscriptions = await storage.getAllInscriptions();
-      }
-      
-      // Get full inscription data with student and exam schedule details
-      const fullInscriptions = await Promise.all(
-        inscriptions.map(async (inscription) => {
-          const student = await storage.getStudent(inscription.studentId);
-          
-          // Fetch exam schedules with conditions, keeping track of valid ones only
-          const examSchedulesWithConditions: any[] = [];
-          for (let index = 0; index < inscription.examScheduleIds.length; index++) {
-            const id = inscription.examScheduleIds[index];
-            const exam = await storage.getExamSchedule(parseInt(id));
-            if (exam) {
-              // Add condition from examConditions array (defaults to "regular" if not present)
-              const condition = inscription.examConditions?.[index] || "regular";
-              examSchedulesWithConditions.push({ ...exam, condition });
-            }
-          }
-          
-          return {
-            ...inscription,
-            student,
-            examSchedules: examSchedulesWithConditions
-          };
-        })
-      );
-      
-      res.json(fullInscriptions);
+      // Load the active call's related data in bulk. The previous N+1
+      // implementation issued thousands of sequential queries in production.
+      res.json(await loadActiveCallInscriptions(storage));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch inscriptions" });
     }
