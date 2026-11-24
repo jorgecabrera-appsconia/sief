@@ -379,19 +379,9 @@ export class DatabaseStorage implements IStorage {
 
       let student: Student;
       if (existingStudent) {
-        const normalizedPhone = (value: string) => value.replace(/\D/g, "");
-        const contactMatches =
-          existingStudent.email.trim().toLowerCase() ===
-            input.student.email.trim().toLowerCase() &&
-          normalizedPhone(existingStudent.phone) ===
-            normalizedPhone(input.student.phone);
-        if (!contactMatches) {
-          throw new RegistrationError(
-            "CONTACT_MISMATCH",
-            "Los datos de contacto no coinciden con el registro existente",
-          );
-        }
-
+        // The DNI is the stable identifier for the public registration flow.
+        // Submitted details are the student's current data and replace the
+        // stored values atomically with the new inscription.
         const [updated] = await tx
           .update(students)
           .set(input.student)

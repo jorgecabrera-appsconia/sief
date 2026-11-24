@@ -146,7 +146,7 @@ export default function EnhancedForm() {
         toast({
           title: result.exists ? "DNI registrado" : "DNI nuevo",
           description: result.exists
-            ? "Complete sus datos. Para proteger su información, no mostramos datos guardados. El correo y teléfono deben coincidir con el registro existente."
+            ? "Complete sus datos actuales. Al confirmar la inscripción, el registro del alumno se actualizará con la información ingresada."
             : "Complete sus datos para continuar con la inscripción.",
         });
       } else {
