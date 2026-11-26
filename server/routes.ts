@@ -1013,7 +1013,7 @@ export function registerRoutes(
     }
   });
 
-  app.post("/api/maintenance/toggle", requireSuperadmin, async (req: AuthenticatedRequest, res) => {
+  app.post("/api/maintenance/toggle", requireAdminRole, async (req: AuthenticatedRequest, res) => {
     try {
       const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(req.body);
       await storage.setSystemSetting('maintenance_mode', enabled ? 'true' : 'false', req.user!.username);

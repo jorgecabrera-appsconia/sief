@@ -413,15 +413,15 @@ describe("createApp", () => {
     expect(response.body.code).toBe("SESSION_INVALID");
   });
 
-  it("authorizes maintenance mode by superadmin role instead of username", async () => {
-    const superadmin = {
-      id: 9, username: "otra.persona", password: "stored-hash", role: "superadmin",
+  it("authorizes maintenance mode for administrators", async () => {
+    const admin = {
+      id: 9, username: "otra.persona", password: "stored-hash", role: "admin",
       isActive: true, mustChangePassword: false, sessionVersion: 1,
       createdAt: new Date(), updatedAt: new Date(),
     };
     const storage = createStorage({
-      validateAdminCredentials: async () => superadmin,
-      getAdminUserById: async () => superadmin,
+      validateAdminCredentials: async () => admin,
+      getAdminUserById: async () => admin,
       setSystemSetting: async () => ({ id: 1, key: "maintenance_mode", value: "true", updatedBy: "otra.persona", updatedAt: new Date() }),
     } as Partial<IStorage>);
     const agent = request.agent(buildTestApp(storage));

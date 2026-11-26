@@ -387,7 +387,7 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
       toast({
         title: response.message,
         description: response.maintenanceMode 
-          ? "El sistema está en modo mantenimiento. Solo superadmin puede acceder."
+          ? "El sistema está en modo mantenimiento. Solo los administradores pueden acceder."
           : "El sistema está disponible para todos los usuarios."
       });
     },
@@ -1226,7 +1226,7 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {user.role === 'superadmin' && (
+              {(user.role === 'admin' || user.role === 'superadmin') && (
                 <Button
                   onClick={() => toggleMaintenanceMutation.mutate(!maintenanceMode)}
                   variant={maintenanceMode ? "destructive" : "secondary"}
