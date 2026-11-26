@@ -1,609 +1,275 @@
 import {
-  Document,
-  Packer,
-  Paragraph,
-  Table,
-  TableRow,
-  TableCell,
-  TextRun,
   AlignmentType,
   BorderStyle,
+  Document,
+  Footer,
+  Packer,
+  PageBreak,
+  PageNumber,
+  Paragraph,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
   WidthType,
-  HeadingLevel,
 } from "docx";
 import { saveAs } from "file-saver";
-import type { ExamSchedule, Inscription, Student } from "@shared/schema";
+import type { ExamSchedule, Student } from "@shared/schema";
+import type { ActaCondition, ActaSection } from "./acta-volante-data";
 
-interface ActaVolanteData {
+export interface ActaVolanteDocxData {
   examSchedule: ExamSchedule;
-  inscriptions: Inscription[];
-  students: Student[];
+  sections: ActaSection[];
 }
 
-export async function generateActaVolanteDOCX(data: ActaVolanteData) {
-  const { examSchedule, inscriptions, students } = data;
+const MAX_ROWS_PER_FINAL_PAGE = 13;
+const MAX_MANUAL_ROWS = 5;
+const borders = {
+  top: { style: BorderStyle.SINGLE, size: 4, color: "000000" },
+  bottom: { style: BorderStyle.SINGLE, size: 4, color: "000000" },
+  left: { style: BorderStyle.SINGLE, size: 4, color: "000000" },
+  right: { style: BorderStyle.SINGLE, size: 4, color: "000000" },
+};
 
-  // Calcular inscriptos confirmados
-  const confirmedRows = inscriptions.filter(
-    (inscription) => inscription.status === "confirmed",
-  );
+function conditionLabel(condition: ActaCondition) {
+  return condition === "libre" ? "ALUMNOS LIBRES" : "ALUMNOS REGULARES";
+}
 
-  // Filas de estudiantes confirmados
-  const studentRows = confirmedRows
-    .map((inscription, index) => {
-      const student = students.find((s) => s.id === inscription.studentId);
-      if (!student) return null;
-      // Add condition indicator (L) for "libre" students
-      const inscriptionWithCondition = inscription as Inscription & {
-        conditionForSubject?: string;
-      };
-      const conditionLabel =
-        inscriptionWithCondition.conditionForSubject === "libre" ? " (L)" : "";
-      return {
-        number: (index + 1).toString(),
-        name: `${student.lastName}, ${student.firstName}${conditionLabel}`,
-        dni: student.dni.toString(),
-      };
-    })
-    .filter((row) => row !== null);
+function paragraph(
+  text: string,
+  options: {
+    bold?: boolean;
+    size?: number;
+    alignment?: (typeof AlignmentType)[keyof typeof AlignmentType];
+    after?: number;
+    before?: number;
+  } = {},
+) {
+  return new Paragraph({
+    children: [new TextRun({ text, bold: options.bold, size: options.size ?? 20 })],
+    alignment: options.alignment,
+    spacing: { after: options.after, before: options.before },
+  });
+}
 
-  // Agregar filas vacías hasta 10 más
-  const extraRows = 10;
-  for (let i = 0; i < extraRows; i++) {
-    studentRows.push({
-      number: "",
-      name: "",
-      dni: "",
-    });
-  }
+function cell(
+  text: string,
+  width: number,
+  options: { bold?: boolean; align?: (typeof AlignmentType)[keyof typeof AlignmentType]; rowSpan?: number; columnSpan?: number } = {},
+) {
+  return new TableCell({
+    children: [paragraph(text, { bold: options.bold, alignment: options.align ?? AlignmentType.CENTER })],
+    width: { size: width, type: WidthType.PERCENTAGE },
+    rowSpan: options.rowSpan,
+    columnSpan: options.columnSpan,
+    borders,
+  });
+}
 
-  // Crear el documento
+function multiLineCell(
+  lines: string[],
+  width: number,
+  options: { bold?: boolean; align?: (typeof AlignmentType)[keyof typeof AlignmentType] } = {},
+) {
+  return new TableCell({
+    children: lines.map((line, index) => paragraph(line, {
+      bold: options.bold,
+      alignment: options.align ?? AlignmentType.CENTER,
+      after: index === lines.length - 1 ? undefined : 80,
+    })),
+    width: { size: width, type: WidthType.PERCENTAGE },
+    borders,
+  });
+}
+
+function studentRow(student: Student, index: number) {
+  return new TableRow({
+    cantSplit: true,
+    children: [
+      cell(String(index + 1), 6),
+      cell(`${student.lastName}, ${student.firstName}`, 35, { align: AlignmentType.LEFT }),
+      cell("", 10),
+      cell("", 10),
+      cell("", 10),
+      cell("", 7),
+      cell("", 8),
+      cell(String(student.dni), 14),
+    ],
+  });
+}
+
+function emptyStudentRow() {
+  return new TableRow({
+    cantSplit: true,
+    children: [
+      cell("", 6),
+      cell("", 35, { align: AlignmentType.LEFT }),
+      cell("", 10),
+      cell("", 10),
+      cell("", 10),
+      cell("", 7),
+      cell("", 8),
+      cell("", 14),
+    ],
+  });
+}
+
+function studentsTable(section: ActaSection) {
+  const manualRows =
+    section.students.length < MAX_ROWS_PER_FINAL_PAGE
+      ? Math.min(MAX_MANUAL_ROWS, MAX_ROWS_PER_FINAL_PAGE - section.students.length)
+      : 0;
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        tableHeader: true,
+        cantSplit: true,
+        children: [
+          cell("N°", 6, { bold: true, rowSpan: 2 }),
+          cell("APELLIDO Y NOMBRE", 35, { bold: true, rowSpan: 2 }),
+          cell("Calificaciones", 30, { bold: true, columnSpan: 3 }),
+          cell("N° de Bol.", 15, { bold: true, columnSpan: 2 }),
+          cell("Documento de Identidad", 14, { bold: true, rowSpan: 2 }),
+        ],
+      }),
+      new TableRow({
+        tableHeader: true,
+        cantSplit: true,
+        children: [
+          cell("Esc.", 10, { bold: true }),
+          cell("Oral", 10, { bold: true }),
+          cell("Prom.", 10, { bold: true }),
+          cell("Esc.", 7, { bold: true }),
+          cell("Oral", 8, { bold: true }),
+        ],
+      }),
+      ...section.students.map(studentRow),
+      ...Array.from({ length: manualRows }, emptyStudentRow),
+    ],
+  });
+}
+
+function closingBlock(examSchedule: ExamSchedule, totalStudents: number) {
+  return [
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({
+          cantSplit: true,
+          children: [
+            multiLineCell(["Presidente:", "Vocal:", "Vocal:", "Vocal Suplente:"], 15, {
+              bold: true,
+              align: AlignmentType.LEFT,
+            }),
+            multiLineCell([examSchedule.presidente, examSchedule.vocal1, examSchedule.vocal2, examSchedule.vocalSuplente], 35, {
+              align: AlignmentType.LEFT,
+            }),
+            multiLineCell(["Total de Alumnos:", "Aprobados:", "Aplazados:", "Ausentes:"], 25, {
+              bold: true,
+              align: AlignmentType.LEFT,
+            }),
+            multiLineCell([String(totalStudents), "", "", ""], 25),
+          ],
+        }),
+      ],
+    }),
+    paragraph(
+      "La Rioja, ...................... de ..................................... de 2026",
+      { alignment: AlignmentType.CENTER, before: 240 },
+    ),
+  ];
+}
+
+function sectionChildren(
+  examSchedule: ExamSchedule,
+  section: ActaSection,
+  startsOnNewPage: boolean,
+) {
+  return [
+    ...(startsOnNewPage ? [new Paragraph({ children: [new PageBreak()] })] : []),
+    paragraph("INSTITUTO SUPERIOR DE FORMACIÓN DOCENTE", {
+      bold: true,
+      size: 24,
+      alignment: AlignmentType.CENTER,
+      after: 80,
+    }),
+    paragraph('"DR. PEDRO IGNACIO DE CASTRO BARROS"', {
+      bold: true,
+      size: 24,
+      alignment: AlignmentType.CENTER,
+      after: 160,
+    }),
+    paragraph("ACTA VOLANTE DE EXÁMENES", {
+      bold: true,
+      size: 28,
+      alignment: AlignmentType.CENTER,
+      after: 80,
+    }),
+    paragraph(conditionLabel(section.condition), {
+      bold: true,
+      size: 22,
+      alignment: AlignmentType.CENTER,
+      after: 160,
+    }),
+    paragraph("Folio: ___________", { alignment: AlignmentType.RIGHT, after: 160 }),
+    paragraph(
+      `Acta de Estudiantes: _______________     Carrera: ${examSchedule.profesorado}     Fecha: ___/___/_____`,
+      { after: 80 },
+    ),
+    paragraph(
+      `Espacio Curricular: ${examSchedule.subject}     Año: ${examSchedule.year}° Turno: ${examSchedule.turno.charAt(0).toUpperCase() + examSchedule.turno.slice(1)}`,
+      { after: examSchedule.division ? 80 : 160 },
+    ),
+    ...(examSchedule.division
+      ? [paragraph(`División: ${examSchedule.division}`, { alignment: AlignmentType.RIGHT, after: 160 })]
+      : []),
+    studentsTable(section),
+    paragraph("", { after: 160 }),
+    ...closingBlock(examSchedule, section.students.length),
+  ];
+}
+
+export function buildActaVolanteDOCX(data: ActaVolanteDocxData) {
+  const { examSchedule, sections } = data;
   const doc = new Document({
     sections: [
       {
-        properties: {},
-        children: [
-          // Encabezado institucional
-          new Paragraph({
+        properties: {
+          page: {
+            margin: { top: 720, right: 720, bottom: 720, left: 720 },
+          },
+        },
+        footers: {
+          default: new Footer({
             children: [
-              new TextRun({
-                text: "INSTITUTO SUPERIOR DE FORMACIÓN DOCENTE",
-                bold: true,
-                size: 24,
-              }),
-            ],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 120 },
-          }),
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: '"DR. PEDRO IGNACIO DE CASTRO BARROS"',
-                bold: true,
-                size: 24,
-              }),
-            ],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 240 },
-          }),
-
-          // Título del acta
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: "ACTA VOLANTE DE EXÁMENES",
-                bold: true,
-                size: 28,
-              }),
-            ],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 360 },
-          }),
-
-          // Folio (alineado a la derecha)
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: "Folio: ___________",
-                size: 20,
-              }),
-            ],
-            alignment: AlignmentType.RIGHT,
-            spacing: { after: 240 },
-          }),
-
-          // Información del examen
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `Acta de Estudiantes: _______________     Carrera: ${examSchedule.profesorado}     Fecha: ___/___/_____`,
-                size: 20,
-              }),
-            ],
-            spacing: { after: 160 },
-          }),
-
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `Espacio Curricular: ${examSchedule.subject}     Año: ${examSchedule.year}° Turno: ${examSchedule.turno.charAt(0).toUpperCase() + examSchedule.turno.slice(1)}`,
-                size: 20,
-              }),
-            ],
-            spacing: { after: examSchedule.division ? 120 : 240 },
-          }),
-
-          // División si existe (alineado a la derecha como en el PDF)
-          ...(examSchedule.division
-            ? [
-                new Paragraph({
-                  children: [
-                    new TextRun({
-                      text: `División: ${examSchedule.division}`,
-                      size: 18,
-                    }),
-                  ],
-                  alignment: AlignmentType.RIGHT,
-                  spacing: { after: 240 },
-                }),
-              ]
-            : []),
-
-          // Tabla de estudiantes - formato idéntico al PDF
-          new Table({
-            rows: [
-              // Encabezados compuestos - primera fila
-              new TableRow({
+              new Paragraph({
+                alignment: AlignmentType.RIGHT,
                 children: [
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({ text: "N°", bold: true, size: 20 }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    rowSpan: 2,
-                    width: { size: 6, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "APELLIDO Y NOMBRE",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    rowSpan: 2,
-                    width: { size: 35, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "Calificaciones",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    columnSpan: 3,
-                    width: { size: 30, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "N° de Bol.",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    columnSpan: 2,
-                    width: { size: 15, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "Documento de Identidad",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    rowSpan: 2,
-                    width: { size: 14, type: WidthType.PERCENTAGE },
-                  }),
-                ],
-              }),
-              // Segunda fila de encabezados
-              new TableRow({
-                children: [
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({ text: "Esc.", bold: true, size: 18 }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    width: { size: 10, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({ text: "Oral", bold: true, size: 18 }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    width: { size: 10, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({ text: "Prom.", bold: true, size: 18 }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    width: { size: 10, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({ text: "Esc.", bold: true, size: 18 }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    width: { size: 7, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({ text: "Oral", bold: true, size: 18 }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    width: { size: 8, type: WidthType.PERCENTAGE },
-                  }),
-                ],
-              }),
-              // Filas de estudiantes con formato idéntico al PDF
-              ...studentRows.map(
-                (row) =>
-                  new TableRow({
-                    children: [
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [
-                              new TextRun({ text: row.number, size: 20 }),
-                            ],
-                            alignment: AlignmentType.CENTER,
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [
-                              new TextRun({ text: row.name, size: 20 }),
-                            ],
-                            alignment: AlignmentType.LEFT,
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [new TextRun({ text: "", size: 20 })],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [new TextRun({ text: "", size: 20 })],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [new TextRun({ text: "", size: 20 })],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [new TextRun({ text: "", size: 20 })],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [new TextRun({ text: "", size: 20 })],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        children: [
-                          new Paragraph({
-                            children: [
-                              new TextRun({ text: row.dni, size: 20 }),
-                            ],
-                            alignment: AlignmentType.CENTER,
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
-              ),
-            ],
-            width: { size: 100, type: WidthType.PERCENTAGE },
-          }),
-
-          // Espaciado después de la tabla
-          new Paragraph({
-            children: [new TextRun({ text: "" })],
-            spacing: { after: 240 },
-          }),
-
-          // Tabla de resumen estadístico (Total de Alumnos, Aprobados, Aplazados, Ausentes)
-          new Table({
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "Total de Alumnos:",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.LEFT,
-                      }),
-                    ],
-                    width: { size: 25, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: confirmedRows.length.toString(),
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                    width: { size: 25, type: WidthType.PERCENTAGE },
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [new TextRun({ text: "", size: 20 })],
-                      }),
-                    ],
-                    width: { size: 50, type: WidthType.PERCENTAGE },
-                  }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "Aprobados:",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.LEFT,
-                      }),
-                    ],
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [new TextRun({ text: "", size: 20 })],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [new TextRun({ text: "", size: 20 })],
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "Aplazados:",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.LEFT,
-                      }),
-                    ],
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [new TextRun({ text: "", size: 20 })],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [new TextRun({ text: "", size: 20 })],
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: "Ausentes:",
-                            bold: true,
-                            size: 20,
-                          }),
-                        ],
-                        alignment: AlignmentType.LEFT,
-                      }),
-                    ],
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [new TextRun({ text: "", size: 20 })],
-                        alignment: AlignmentType.CENTER,
-                      }),
-                    ],
-                  }),
-                  new TableCell({
-                    children: [
-                      new Paragraph({
-                        children: [new TextRun({ text: "", size: 20 })],
-                      }),
-                    ],
-                  }),
+                  new TextRun({ text: "Página " }),
+                  new TextRun({ children: [PageNumber.CURRENT] }),
+                  new TextRun({ text: " de " }),
+                  new TextRun({ children: [PageNumber.TOTAL_PAGES] }),
                 ],
               }),
             ],
-            width: { size: 50, type: WidthType.PERCENTAGE },
           }),
-
-          // Espaciado después del resumen
-          new Paragraph({
-            children: [new TextRun({ text: "" })],
-            spacing: { after: 240 },
-          }),
-
-          // Información del tribunal - formato idéntico al PDF
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `Presidente: ${examSchedule.presidente || "_".repeat(50)}`,
-                size: 20,
-              }),
-              new TextRun({
-                text: `                    Firma: ${"_".repeat(40)}`,
-                size: 20,
-              }),
-            ],
-            spacing: { after: 300 },
-          }),
-
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `Vocal 1°: ${examSchedule.vocal1 || "_".repeat(50)}`,
-                size: 20,
-              }),
-              new TextRun({
-                text: `                      Firma: ${"_".repeat(40)}`,
-                size: 20,
-              }),
-            ],
-            spacing: { after: 300 },
-          }),
-
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `Vocal 2°: ${examSchedule.vocal2 || "_".repeat(50)}`,
-                size: 20,
-              }),
-              new TextRun({
-                text: `                      Firma: ${"_".repeat(40)}`,
-                size: 20,
-              }),
-            ],
-            spacing: { after: 300 },
-          }),
-
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `Vocal Suplente: ${examSchedule.vocalSuplente || "_".repeat(50)}`,
-                size: 20,
-              }),
-              new TextRun({
-                text: `           Firma: ${"_".repeat(40)}`,
-                size: 20,
-              }),
-            ],
-            spacing: { after: 480 },
-          }),
-
-          // Fecha final - formato idéntico al PDF
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: "La Rioja, ...................... de ..................................... de 2026",
-                size: 22,
-              }),
-            ],
-            alignment: AlignmentType.CENTER,
-            spacing: { before: 240 },
-          }),
-        ],
+        },
+        children: sections.flatMap((section, index) =>
+          sectionChildren(examSchedule, section, index > 0),
+        ),
       },
     ],
   });
 
-  // Generar y guardar el archivo
+  return doc;
+}
+
+export async function generateActaVolanteDOCX(data: ActaVolanteDocxData) {
+  const doc = buildActaVolanteDOCX(data);
   const buffer = await Packer.toBlob(doc);
+  const { examSchedule } = data;
   const fileName = `Acta_Volante_${examSchedule.subject}_${examSchedule.year}año_${examSchedule.turno}_${examSchedule.date}.docx`;
   saveAs(buffer, fileName);
 }

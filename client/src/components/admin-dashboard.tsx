@@ -163,6 +163,7 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
   const [filterTeacher, setFilterTeacher] = useState("");
   const [filterExamCall, setFilterExamCall] = useState("all");
   const [filterCondition, setFilterCondition] = useState("");
+  const [selectedActaExamId, setSelectedActaExamId] = useState("");
   const [isExamFormOpen, setIsExamFormOpen] = useState(false);
   const [isPasswordFormOpen, setIsPasswordFormOpen] = useState(false);
   const [editingExam, setEditingExam] = useState<ExamSchedule | null>(null);
@@ -325,12 +326,35 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
   }, [activeExamCall?.id]);
 
   // Filter exam schedules by active exam call (prefer examCallId, fallback to date range)
-  const activeExamSchedules = examSchedules.filter(exam => {
-    if (!activeExamCall) return false;
-    if (exam.examCallId != null) return exam.examCallId === activeExamCall.id;
-    if (!activeExamCall.startDate || !activeExamCall.endDate || !exam.date) return false;
-    return exam.date >= activeExamCall.startDate && exam.date <= activeExamCall.endDate;
-  });
+  const activeExamSchedules = React.useMemo(
+    () => examSchedules.filter((exam) => {
+      if (!activeExamCall) return false;
+      if (exam.examCallId != null) return exam.examCallId === activeExamCall.id;
+      if (!activeExamCall.startDate || !activeExamCall.endDate || !exam.date) return false;
+      return exam.date >= activeExamCall.startDate && exam.date <= activeExamCall.endDate;
+    }),
+    [activeExamCall, examSchedules],
+  );
+
+  const actaExamCandidates = React.useMemo(
+    () => activeExamSchedules.filter((exam) =>
+      exam.subject === filterSubject &&
+      exam.division === filterDivision &&
+      (filterProfesorado === "all" || !filterProfesorado || exam.profesorado === filterProfesorado) &&
+      (filterTurno === "all" || !filterTurno || exam.turno === filterTurno) &&
+      (filterYear === "all" || !filterYear || String(exam.year) === filterYear),
+    ),
+    [activeExamSchedules, filterDivision, filterProfesorado, filterSubject, filterTurno, filterYear],
+  );
+
+  useEffect(() => {
+    setSelectedActaExamId((currentId) => {
+      if (actaExamCandidates.some((exam) => String(exam.id) === currentId)) {
+        return currentId;
+      }
+      return actaExamCandidates.length === 1 ? String(actaExamCandidates[0].id) : "";
+    });
+  }, [actaExamCandidates]);
 
   // Check maintenance mode status
   const { data: maintenanceData } = useQuery({
@@ -1050,13 +1074,17 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
       return;
     }
 
-    // Find the exam schedule for the selected subject and division, considering profesorado and turno filters
-    // Only use active exam schedules (from the active exam call)
-    const selectedExam = activeExamSchedules?.find(exam => 
-      exam.subject === filterSubject && 
-      exam.division === filterDivision &&
-      (filterProfesorado === "all" || !filterProfesorado || exam.profesorado === filterProfesorado) &&
-      (filterTurno === "all" || !filterTurno || exam.turno === filterTurno)
+    if (!selectedActaExamId) {
+      toast({
+        title: "Seleccione una mesa",
+        description: "Seleccione la fecha y hora de la mesa para generar el acta correcta",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const selectedExam = actaExamCandidates.find(
+      (exam) => exam.id === Number(selectedActaExamId),
     );
     if (!selectedExam) {
       toast({
@@ -1069,34 +1097,19 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
       return;
     }
 
-    // Get confirmed inscriptions for this subject, filtered by active exam call date range
-    const confirmedInscriptions = filteredInscriptions.filter(inscription => 
-      inscription.status === 'confirmed' &&
-      inscription.examSchedules?.some((exam: any) => {
-        if (!activeExamCall?.startDate || !activeExamCall?.endDate || !exam.date) return false;
-        return exam.subject === filterSubject &&
-          exam.date >= activeExamCall.startDate && 
-          exam.date <= activeExamCall.endDate;
-      })
-    );
+    const { buildActaSections } = await import("@/lib/acta-volante-data");
+    // An official acta always includes every confirmed student of its exact
+    // mesa, independently from search or secondary list filters.
+    const sections = buildActaSections(selectedExam.id, inscriptions);
 
-    if (confirmedInscriptions.length === 0) {
+    if (sections.length === 0) {
       toast({
         title: "Sin inscripciones confirmadas",
-        description: "No hay inscripciones confirmadas para esta materia",
+        description: "No hay inscripciones confirmadas para esta mesa",
         variant: "destructive",
       });
       return;
     }
-
-    // Extract condition for each inscription for this specific subject
-    const inscriptionsWithCondition = confirmedInscriptions.map(inscription => {
-      const examForSubject = inscription.examSchedules?.find((exam: any) => exam.subject === filterSubject);
-      return {
-        ...inscription,
-        conditionForSubject: examForSubject?.condition || "regular"
-      };
-    });
 
     // Generate the PDF or DOCX based on format
     if (format === 'pdf') {
@@ -1105,13 +1118,12 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
       );
       generateActaVolantePDF({
         examSchedule: selectedExam,
-        inscriptions: inscriptionsWithCondition,
-        students: confirmedInscriptions.map(i => i.student).filter(Boolean)
+        sections,
       });
       
       toast({
         title: "Acta Volante generada",
-        description: `Se generó el Acta Volante en PDF para ${filterSubject}`,
+        description: `Se generó el Acta Volante en PDF para ${filterSubject} (${sections.length} condición${sections.length === 1 ? "" : "es"})`,
       });
     } else {
       const { generateActaVolanteDOCX } = await import(
@@ -1119,13 +1131,12 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
       );
       generateActaVolanteDOCX({
         examSchedule: selectedExam,
-        inscriptions: inscriptionsWithCondition,
-        students: confirmedInscriptions.map(i => i.student).filter(Boolean)
+        sections,
       });
       
       toast({
         title: "Acta Volante generada",
-        description: `Se generó el Acta Volante en DOCX para ${filterSubject}`,
+        description: `Se generó el Acta Volante en DOCX para ${filterSubject} (${sections.length} condición${sections.length === 1 ? "" : "es"})`,
       });
     }
   };
@@ -1383,6 +1394,39 @@ export default function AdminDashboard({ user, onLogout, onUserUpdated }: AdminD
                     </Select>
                   </div>
                 </div>
+
+                {filterSubject && filterSubject !== "all" && filterDivision && filterDivision !== "all" && (
+                  <div className="mb-4 max-w-xl">
+                    <Label>Mesa para Acta</Label>
+                    <Select
+                      value={selectedActaExamId || undefined}
+                      onValueChange={setSelectedActaExamId}
+                      disabled={actaExamCandidates.length === 0}
+                    >
+                      <SelectTrigger>
+                        <SelectValue
+                          placeholder={
+                            actaExamCandidates.length === 0
+                              ? "No hay mesas activas que coincidan"
+                              : "Seleccione fecha y hora de la mesa"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {actaExamCandidates.map((exam) => (
+                          <SelectItem key={exam.id} value={String(exam.id)}>
+                            {formatDateDDMMYY(exam.date)} - {exam.time} - {exam.profesorado} - {exam.turno}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {actaExamCandidates.length > 1 && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Hay varias mesas activas con estos filtros. Seleccione la fecha y hora correcta.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Search Filters */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
